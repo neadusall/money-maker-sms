@@ -154,6 +154,10 @@ export const contacts = pgTable(
     // them the position details. Prevents re-sending on subsequent replies.
     positionEmailSentAt: timestamp("position_email_sent_at", { withTimezone: true }),
 
+    // Set when Ryan has reviewed this candidate's to-dos (the "I've read it"
+    // checkmark on the To-dos tab). Null = not yet reviewed.
+    todosReviewedAt: timestamp("todos_reviewed_at", { withTimezone: true }),
+
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),

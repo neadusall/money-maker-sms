@@ -2,7 +2,8 @@ import Link from "next/link";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { todos, contacts, campaigns, type TodoChannel } from "@/db/schema";
-import { completeTodo, reopenTodo, deleteTodo } from "@/lib/actions";
+import { completeTodo, reopenTodo, deleteTodo, toggleCandidateReviewed } from "@/lib/actions";
+import { DeleteCorrespondenceButton } from "@/components/DeleteCorrespondenceButton";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { LiveBadge } from "@/components/LiveBadge";
 import { formatPhone } from "@/lib/phone";
@@ -45,6 +46,7 @@ export default async function TodosPage({
       company: contacts.company,
       jobTitle: contacts.jobTitle,
       linkedinUrl: contacts.linkedinUrl,
+      reviewedAt: contacts.todosReviewedAt,
       campaignName: campaigns.name,
     })
     .from(todos)
@@ -57,7 +59,17 @@ export default async function TodosPage({
   // Group by candidate so every person's open actions sit together.
   const groups = new Map<
     string,
-    { name: string; sub: string; campaignId: string; conversationId: string | null; linkedin: string; linkedinDirect: boolean; items: typeof rows }
+    {
+      contactId: string;
+      name: string;
+      sub: string;
+      campaignId: string;
+      conversationId: string | null;
+      linkedin: string;
+      linkedinDirect: boolean;
+      reviewed: boolean;
+      items: typeof rows;
+    }
   >();
   for (const r of rows) {
     const name = [r.firstName, r.lastName].filter(Boolean).join(" ") || formatPhone(r.phone);
@@ -65,11 +77,22 @@ export default async function TodosPage({
     const li = linkedinLink(r.linkedinUrl, name, r.company, r.jobTitle);
     const g =
       groups.get(r.contactId) ??
-      { name, sub, campaignId: r.campaignId, conversationId: r.conversationId, linkedin: li.url, linkedinDirect: li.direct, items: [] as typeof rows };
+      {
+        contactId: r.contactId,
+        name,
+        sub,
+        campaignId: r.campaignId,
+        conversationId: r.conversationId,
+        linkedin: li.url,
+        linkedinDirect: li.direct,
+        reviewed: r.reviewedAt != null,
+        items: [] as typeof rows,
+      };
     g.items.push(r);
     groups.set(r.contactId, g);
   }
-  const grouped = [...groups.values()];
+  // Un-reviewed candidates first, so the top of the list is what still needs eyes.
+  const grouped = [...groups.values()].sort((a, b) => Number(a.reviewed) - Number(b.reviewed));
 
   return (
     <section className="grid gap-6">
@@ -138,11 +161,43 @@ export default async function TodosPage({
       ) : (
         <ul className="grid gap-4">
           {grouped.map((g, i) => (
-            <li key={i} className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+            <li
+              key={i}
+              className={
+                "rounded-2xl border p-5 shadow-sm transition " +
+                (g.reviewed ? "border-emerald-200 bg-emerald-50/40 opacity-70" : "border-zinc-200 bg-white")
+              }
+            >
               <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <h3 className="font-semibold text-zinc-900">{g.name}</h3>
-                  <p className="truncate text-xs text-zinc-500">{g.sub}</p>
+                <div className="flex min-w-0 items-start gap-2.5">
+                  <form action={toggleCandidateReviewed.bind(null, g.contactId)} className="pt-0.5">
+                    <button
+                      title={g.reviewed ? "Reviewed — click to mark unread" : "Mark as reviewed (I've read this)"}
+                      className={
+                        "flex h-5 w-5 items-center justify-center rounded-md border transition " +
+                        (g.reviewed
+                          ? "border-emerald-500 bg-emerald-500 text-white"
+                          : "border-zinc-300 hover:border-emerald-500 hover:bg-emerald-50")
+                      }
+                    >
+                      {g.reviewed ? (
+                        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                        </svg>
+                      ) : null}
+                    </button>
+                  </form>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-semibold text-zinc-900">{g.name}</h3>
+                      {g.reviewed ? (
+                        <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                          Reviewed
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="truncate text-xs text-zinc-500">{g.sub}</p>
+                  </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <a
@@ -177,6 +232,7 @@ export default async function TodosPage({
                       Open thread →
                     </Link>
                   ) : null}
+                  <DeleteCorrespondenceButton contactId={g.contactId} name={g.name} />
                 </div>
               </div>
 

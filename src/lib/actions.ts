@@ -884,6 +884,27 @@ export async function deleteTodo(id: string) {
   revalidatePath("/todos");
 }
 
+/** Delete a candidate's entire correspondence (thread, messages, to-dos) from the To-dos tab. */
+export async function deleteCorrespondence(contactId: string) {
+  // Deleting the contact cascades its conversation, messages, and to-dos.
+  await db.delete(contacts).where(eq(contacts.id, contactId));
+  revalidatePath("/todos");
+  revalidatePath("/");
+}
+
+/** Toggle the "I've reviewed this candidate" checkmark on the To-dos tab. */
+export async function toggleCandidateReviewed(contactId: string) {
+  const [c] = await db
+    .select({ reviewedAt: contacts.todosReviewedAt })
+    .from(contacts)
+    .where(eq(contacts.id, contactId));
+  await db
+    .update(contacts)
+    .set({ todosReviewedAt: c?.reviewedAt ? null : new Date() })
+    .where(eq(contacts.id, contactId));
+  revalidatePath("/todos");
+}
+
 export async function addManualTodo(formData: FormData) {
   const action = str(formData, "action");
   const channel = (str(formData, "channel") ?? "other") as TodoChannel;
