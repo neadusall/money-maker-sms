@@ -90,7 +90,22 @@ async function categorizeUpload(
   const prev = skipPrev ? await previouslyTextedPhones(phones, campaignId) : new Set<string>();
   for (const p of allow) prev.delete(p);
 
+  // Profile-level dedup (by LinkedIn URL) so the SAME person isn't inserted,
+  // researched, or scored twice — even if uploaded with a different phone.
+  const normUrl = (u: string | null | undefined) =>
+    u ? u.trim().toLowerCase().replace(/\?.*$/, "").replace(/\/+$/, "") : null;
+  const existingUrls = new Set<string>();
+  const existingUrlRows = await db
+    .select({ u: contacts.linkedinUrl })
+    .from(contacts)
+    .where(eq(contacts.campaignId, campaignId));
+  for (const r of existingUrlRows) {
+    const n = normUrl(r.u);
+    if (n) existingUrls.add(n);
+  }
+
   const seen = new Set<string>();
+  const seenUrls = new Set<string>();
   const toInsert: ImportedContact[] = [];
   let dupSkipped = 0;
   let prevSkipped = 0;
@@ -103,6 +118,15 @@ async function categorizeUpload(
     if (inCampaign.has(r.phone)) {
       dupSkipped++;
       continue;
+    }
+    // Same LinkedIn profile already in this upload or campaign = duplicate person.
+    const nu = normUrl(r.linkedinUrl);
+    if (nu) {
+      if (seenUrls.has(nu) || existingUrls.has(nu)) {
+        dupSkipped++;
+        continue;
+      }
+      seenUrls.add(nu);
     }
     if (prev.has(r.phone)) {
       prevSkipped++;

@@ -1,8 +1,11 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
+import { and, eq, isNotNull, ne } from "drizzle-orm";
+import { db } from "@/db/client";
 import { anthropic, CLAUDE_MODEL } from "./anthropic";
-import type { Campaign, Contact } from "@/db/schema";
+import { contacts as contactsTable, type Campaign, type Contact } from "@/db/schema";
 import { enrichLinkedIn, enrichmentToText, isEnrichmentConfigured, type EnrichedProfile } from "./enrich";
+import { recordLlmUsage } from "./usage";
 
 const ScoreSchema = z.object({
   score: z.number().int().min(1).max(100),
@@ -24,6 +27,7 @@ export async function buildScoringRubric(positionSummary: string): Promise<strin
       system: RUBRIC_SYSTEM,
       messages: [{ role: "user", content: positionSummary }],
     });
+    await recordLlmUsage({ model: CLAUDE_MODEL, usage: response.usage, purpose: "rubric" });
     const text = response.content
       .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
       .map((b) => b.text)
@@ -35,23 +39,22 @@ export async function buildScoringRubric(positionSummary: string): Promise<strin
   }
 }
 
-const SYSTEM = `You are an expert recruiter screening candidates against the role rubric. Rate fit 1-100, thinking like a recruiter who prizes TRANSFERABLE enterprise sales leadership — not a keyword filter.
+const SYSTEM = `You are an expert recruiter screening candidates against the role rubric. Rate fit 1-100. Lean GENEROUS — look for reasons a candidate COULD be a fit, not reasons to reject.
 
 CRITICAL RULES:
-- Industry/domain (including whether the candidate is in "SaaS") is NEVER a disqualifier and NEVER a floor requirement. If the rubric frames an industry/domain as a must-have or knockout, IGNORE that framing — treat industry only as a bonus on top.
-- Set the FLOOR from enterprise sales LEADERSHIP only: seniority (VP / Director / Head of Sales), years leading sales teams, owning a region/quota, and experience with complex, multi-stakeholder, larger deals.
-- Then ADD up to ~20 points for domain/industry match to the target space (e.g., SaaS, procurement, supply chain).
+- Industry/domain (including "SaaS") is NEVER a disqualifier or a floor requirement. If the rubric frames an industry as must-have/knockout, IGNORE that — industry is only a bonus on top.
+- INFER enterprise experience from the COMPANIES (current AND past), using your real-world knowledge of those companies. If a candidate sells or LEADS sales at a large, established, well-known, or clearly enterprise-grade company, treat that as genuine enterprise sales experience — even if the profile never says "enterprise," lists no deal sizes, and no ACV. A big/serious company implies large, complex, multi-stakeholder deals; credit it.
+- Judge SENIORITY from the title: VP / SVP / Head of / Director / Regional or Area Sales leader = senior sales leadership; Manager = mid-level; AE / Rep / IC titles = individual contributor.
+- BENEFIT OF THE DOUBT: never deduct for unverifiable specifics (exact ACV, team size, quota). Assume a senior leader at a real company has them; mark such items "confirm in conversation."
 
-CALIBRATION (use the FULL range; do NOT bunch everyone low):
-- 85-100: senior enterprise sales leader AND strong domain match.
-- 65-84: solid enterprise sales leader (VP/Director at a real B2B company) — even in a DIFFERENT/adjacent industry. Most genuine sales VPs/Directors with enterprise, complex-deal experience belong HERE.
-- 45-64: some sales leadership but smaller scope, or unclear enterprise/complex-deal experience.
-- under 45: NOT a sales leader (individual contributor, junior, or an ops/product/marketing/non-sales role), SMB-only with no enterprise exposure, or an unrelated function.
-A VP or Director of Sales at a substantial B2B company should rarely score below 60 unless there is a clear seniority or function problem.
+CALIBRATION (lean high; still use the full range):
+- 85-100: senior sales leader AND strong domain match (e.g. enterprise SaaS / procurement / supply chain).
+- 70-84: senior sales leader (VP/Dir/Head/Regional) at a substantial or recognizable B2B company in ANY industry — this is the COMMON bucket for genuine sales leaders; default here.
+- 55-69: sales leadership at a smaller/unknown company, a strong mid-level seller, or some ambiguity in seniority.
+- 40-54: junior management or unclear/limited sales-leadership signal.
+- under 40: clearly NOT a sales leader (individual contributor with no leadership, junior, or an ops/product/marketing/non-sales role), or an unrelated function.
 
-BENEFIT OF THE DOUBT: Score on what's PRESENT. Do NOT deduct for specifics you can't verify from a title/company/profile (exact ACV, team headcount, quota) — assume a senior sales leader at a real company has typical enterprise experience unless something contradicts it, and treat those unknowns as "confirm in conversation," not as gaps that lower the score.
-
-Output ONLY a JSON object: {"score": <integer 1-100>, "reason": "<=280 chars, why"}. No markdown, no preamble.`;
+Output ONLY a JSON object: {"score": <integer 1-100>, "reason": "<=280 chars; cite the title + company signal you used>"}. No markdown, no preamble.`;
 
 /**
  * Score a candidate's fit for the campaign's role using the LLM. Based on the
@@ -101,12 +104,14 @@ export async function scoreCandidate(args: {
     },
   ];
 
+  const model = args.model ?? CLAUDE_MODEL;
   const response = await anthropic().messages.create({
-    model: args.model ?? CLAUDE_MODEL,
+    model,
     max_tokens: 400,
     system: SYSTEM,
     messages: [{ role: "user", content: userBlocks }],
   });
+  await recordLlmUsage({ model, usage: response.usage, purpose: "score", campaignId: args.campaign.id });
 
   const text = response.content
     .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
@@ -146,8 +151,21 @@ export async function scoreContactDeep(args: {
   let enriched = (args.contact.enrichedProfile as EnrichedProfile | null) ?? null;
   let fetched = false;
   if (!enriched && isEnrichmentConfigured() && args.contact.linkedinUrl) {
-    enriched = await enrichLinkedIn(args.contact.linkedinUrl);
-    fetched = true;
+    // Don't pay twice: if any other contact with the SAME LinkedIn URL was
+    // already enriched, reuse that profile instead of calling the API again.
+    const [dup] = await db
+      .select({ p: contactsTable.enrichedProfile })
+      .from(contactsTable)
+      .where(
+        and(
+          eq(contactsTable.linkedinUrl, args.contact.linkedinUrl),
+          ne(contactsTable.id, args.contact.id),
+          isNotNull(contactsTable.enrichedProfile),
+        ),
+      )
+      .limit(1);
+    enriched = dup?.p ? (dup.p as EnrichedProfile) : await enrichLinkedIn(args.contact.linkedinUrl);
+    fetched = true; // store it on this contact too (copy or fresh)
   }
   const enrichmentText = enriched ? enrichmentToText(enriched) : undefined;
   const score = await scoreCandidate({ ...args, enrichmentText });

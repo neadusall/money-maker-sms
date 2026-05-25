@@ -9,6 +9,7 @@ import {
   unique,
   index,
   integer,
+  doublePrecision,
   primaryKey,
 } from "drizzle-orm/pg-core";
 
@@ -331,6 +332,24 @@ export const todos = pgTable(
   (t) => ({
     statusIdx: index("todos_status_idx").on(t.status, t.createdAt),
     uniqDedupe: unique("todos_conversation_dedupe_unique").on(t.conversationId, t.dedupeKey),
+  }),
+);
+
+export const usageEvents = pgTable(
+  "usage_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    kind: text("kind").notNull(), // 'llm' (SMS + LinkedIn are derived from other tables)
+    model: text("model"),
+    purpose: text("purpose"), // classify | draft | score | rubric | todos
+    inputTokens: integer("input_tokens").default(0).notNull(),
+    outputTokens: integer("output_tokens").default(0).notNull(),
+    costUsd: doublePrecision("cost_usd").default(0).notNull(),
+    campaignId: uuid("campaign_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    createdIdx: index("usage_events_created_idx").on(t.createdAt),
   }),
 );
 

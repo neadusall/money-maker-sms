@@ -2,6 +2,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { anthropic, CLAUDE_MODEL } from "./anthropic";
+import { recordLlmUsage } from "./usage";
 import { db } from "@/db/client";
 import { todos, messages, type Campaign, type Contact, type TodoChannel } from "@/db/schema";
 
@@ -74,6 +75,7 @@ export async function generateTodoItems(args: {
     system: SYSTEM,
     messages: [{ role: "user", content: userBlocks }],
   });
+  await recordLlmUsage({ model: CLAUDE_MODEL, usage: response.usage, purpose: "todos", campaignId: args.campaign.id });
 
   const text = response.content
     .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")

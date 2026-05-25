@@ -1,4 +1,5 @@
 import { anthropic, CLAUDE_MODEL } from "./anthropic";
+import { recordLlmUsage } from "./usage";
 import type Anthropic from "@anthropic-ai/sdk";
 import type { Campaign, Contact, ClassificationLabel } from "@/db/schema";
 
@@ -77,6 +78,7 @@ Draft the recruiter's next SMS reply.`,
     system: SYSTEM,
     messages: [{ role: "user", content: userBlocks }],
   });
+  await recordLlmUsage({ model: CLAUDE_MODEL, usage: response.usage, purpose: "draft", campaignId: args.campaign.id });
 
   const text = response.content
     .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")

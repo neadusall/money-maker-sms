@@ -1,6 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { anthropic, CLAUDE_MODEL } from "./anthropic";
+import { recordLlmUsage } from "./usage";
 import type { Campaign, ClassificationLabel } from "@/db/schema";
 
 const LABELS = [
@@ -101,6 +102,7 @@ export async function classifyReply(args: {
     system: SYSTEM,
     messages: [{ role: "user", content: userBlocks }],
   });
+  await recordLlmUsage({ model: CLAUDE_MODEL, usage: response.usage, purpose: "classify", campaignId: args.campaign.id });
 
   const text = response.content
     .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
