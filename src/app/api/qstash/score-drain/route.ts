@@ -37,23 +37,27 @@ export async function POST(request: Request) {
 
   const batch = await db.select().from(contacts).where(selector).limit(SCORE_BATCH);
 
+  // Process the batch concurrently so each drain pass returns fast (enrichment
+  // adds a ~3s API call per contact; sequential would risk the callback timeout).
   let scored = 0;
-  for (const contact of batch) {
-    const { score, enriched, fetched } = await scoreContactDeep({ campaign, contact, model: BULK_MODEL }).catch(
-      () => ({ score: null, enriched: null, fetched: false }),
-    );
-    await db
-      .update(contacts)
-      .set({
-        qualificationScore: score ? score.score : 0,
-        qualificationReason: score ? score.reason : "could not score",
-        // Mark processed so we don't reprocess; cache the fetched profile.
-        enrichedAt: new Date(),
-        ...(fetched ? { enrichedProfile: (enriched as unknown as Record<string, unknown>) ?? null } : {}),
-      })
-      .where(eq(contacts.id, contact.id));
-    if (score) scored++;
-  }
+  await Promise.all(
+    batch.map(async (contact) => {
+      const { score, enriched, fetched } = await scoreContactDeep({ campaign, contact, model: BULK_MODEL }).catch(
+        () => ({ score: null, enriched: null, fetched: false }),
+      );
+      await db
+        .update(contacts)
+        .set({
+          qualificationScore: score ? score.score : 0,
+          qualificationReason: score ? score.reason : "could not score",
+          // Mark processed so we don't reprocess; cache the fetched profile.
+          enrichedAt: new Date(),
+          ...(fetched ? { enrichedProfile: (enriched as unknown as Record<string, unknown>) ?? null } : {}),
+        })
+        .where(eq(contacts.id, contact.id));
+      if (score) scored++;
+    }),
+  );
 
   const [{ remaining }] = await db
     .select({ remaining: sql<number>`count(*)::int` })
