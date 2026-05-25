@@ -10,7 +10,9 @@ const ScoreSchema = z.object({
 });
 export type QualScore = z.infer<typeof ScoreSchema>;
 
-const RUBRIC_SYSTEM = `You are an expert recruiter. Distill the following job description into a COMPACT scoring rubric a screener can apply quickly. Output 6-10 short bullet lines covering: the role title & seniority, required function/domain, must-have experience (years, type), target industries, and any hard disqualifiers. Keep it under ~250 words. Output plain text bullets only — no preamble.`;
+const RUBRIC_SYSTEM = `You are an expert recruiter. Distill this job description into a COMPACT scoring rubric a screener applies quickly. Cover: role title & seniority; core function; must-have experience (years/type of LEADERSHIP and selling); preferred industries/domains — label these clearly as PREFERENCES that ADD points, NOT requirements; typical deal profile; key skills.
+For "Hard Disqualifiers", list ONLY truly absolute knockouts — e.g., not a sales professional at all, individual-contributor with zero leadership when leadership is required, clearly junior, SMB-only with no enterprise exposure, or a completely unrelated function. NEVER put an industry, domain, or specific-sector experience (e.g. "SaaS", "procurement") under must-have/knockout — those ALWAYS belong under PREFERENCES, even if the job description emphasizes them. State explicitly that transferable enterprise sales leadership from an ADJACENT industry is a STRONG candidate, not a reject.
+Keep under ~250 words. Plain bullets, no preamble.`;
 
 /** Distill a long position summary into a compact rubric (one-time per campaign). */
 export async function buildScoringRubric(positionSummary: string): Promise<string | null> {
@@ -33,12 +35,22 @@ export async function buildScoringRubric(positionSummary: string): Promise<strin
   }
 }
 
-const SYSTEM = `You are an expert recruiter screening candidates for a specific role.
-Given the job's position summary and what is known about a candidate (current title,
-company, location, and any signals from their SMS conversation), rate how well the
-candidate fits THIS role from 1-100 (100 = ideal match, 1 = clearly unqualified).
-Weigh seniority level, function/domain match, industry relevance, and conversation signals.
-Be discriminating — reserve 85+ for strong fits and use the full range.
+const SYSTEM = `You are an expert recruiter screening candidates against the role rubric. Rate fit 1-100, thinking like a recruiter who prizes TRANSFERABLE enterprise sales leadership — not a keyword filter.
+
+CRITICAL RULES:
+- Industry/domain (including whether the candidate is in "SaaS") is NEVER a disqualifier and NEVER a floor requirement. If the rubric frames an industry/domain as a must-have or knockout, IGNORE that framing — treat industry only as a bonus on top.
+- Set the FLOOR from enterprise sales LEADERSHIP only: seniority (VP / Director / Head of Sales), years leading sales teams, owning a region/quota, and experience with complex, multi-stakeholder, larger deals.
+- Then ADD up to ~20 points for domain/industry match to the target space (e.g., SaaS, procurement, supply chain).
+
+CALIBRATION (use the FULL range; do NOT bunch everyone low):
+- 85-100: senior enterprise sales leader AND strong domain match.
+- 65-84: solid enterprise sales leader (VP/Director at a real B2B company) — even in a DIFFERENT/adjacent industry. Most genuine sales VPs/Directors with enterprise, complex-deal experience belong HERE.
+- 45-64: some sales leadership but smaller scope, or unclear enterprise/complex-deal experience.
+- under 45: NOT a sales leader (individual contributor, junior, or an ops/product/marketing/non-sales role), SMB-only with no enterprise exposure, or an unrelated function.
+A VP or Director of Sales at a substantial B2B company should rarely score below 60 unless there is a clear seniority or function problem.
+
+BENEFIT OF THE DOUBT: Score on what's PRESENT. Do NOT deduct for specifics you can't verify from a title/company/profile (exact ACV, team headcount, quota) — assume a senior sales leader at a real company has typical enterprise experience unless something contradicts it, and treat those unknowns as "confirm in conversation," not as gaps that lower the score.
+
 Output ONLY a JSON object: {"score": <integer 1-100>, "reason": "<=280 chars, why"}. No markdown, no preamble.`;
 
 /**
