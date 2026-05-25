@@ -39,6 +39,7 @@ import {
   scheduleReply,
   enqueueCampaignDrain,
   enqueueValidationDrain,
+  enqueueScoreDrain,
 } from "./schedule";
 import {
   isPositionEmailConfigured,
@@ -207,6 +208,8 @@ export async function createCampaign(formData: FormData) {
         )
         .onConflictDoNothing({ target: [contacts.campaignId, contacts.phone] });
       if (validate) await enqueueValidationDrain(created.id, 1);
+      // Score everyone's fit for the role in the background.
+      if (isQStashConfigured()) await enqueueScoreDrain(created.id, 3);
     }
     summary = { added: toInsert.length, prev: prevSkipped, dup: dupSkipped };
   }
@@ -304,6 +307,7 @@ export async function uploadContactsCsv(campaignId: string, formData: FormData):
       )
       .onConflictDoNothing({ target: [contacts.campaignId, contacts.phone] });
     if (validate) await enqueueValidationDrain(campaignId, 1);
+    if (isQStashConfigured()) await enqueueScoreDrain(campaignId, 3);
   }
 
   revalidatePath("/");
@@ -399,10 +403,19 @@ export async function sendCampaignBatch(campaignId: string): Promise<void> {
     return;
   }
 
+  // If a minimum fit score is set, only text contacts that meet it.
+  const minScore = campaign.minScoreToSend;
   const pending = await db
     .select()
     .from(contacts)
-    .where(and(eq(contacts.campaignId, campaignId), eq(contacts.status, "pending"), eq(contacts.optedOut, false)))
+    .where(
+      and(
+        eq(contacts.campaignId, campaignId),
+        eq(contacts.status, "pending"),
+        eq(contacts.optedOut, false),
+        minScore ? sql`${contacts.qualificationScore} >= ${minScore}` : undefined,
+      ),
+    )
     .limit(limit);
 
   let sent = 0;
@@ -900,6 +913,25 @@ export async function reopenTodo(id: string) {
 export async function deleteTodo(id: string) {
   await db.delete(todos).where(eq(todos.id, id));
   revalidatePath("/todos");
+}
+
+/** Kick off background fit-scoring for every unscored contact in a campaign. */
+export async function scoreCampaignContacts(campaignId: string): Promise<void> {
+  if (!isQStashConfigured()) return;
+  await enqueueScoreDrain(campaignId, 1);
+  revalidatePath(`/campaigns/${campaignId}/contacts`);
+}
+
+/** Set the minimum fit score required to text a contact (null/0 = no filter). */
+export async function setMinScore(campaignId: string, formData: FormData): Promise<void> {
+  const raw = str(formData, "minScore");
+  const n = raw ? Number(raw) : null;
+  await db
+    .update(campaigns)
+    .set({ minScoreToSend: n && n > 0 ? n : null })
+    .where(eq(campaigns.id, campaignId));
+  revalidatePath(`/campaigns/${campaignId}/contacts`);
+  revalidatePath(`/campaigns/${campaignId}`);
 }
 
 /** Delete a candidate's entire correspondence (thread, messages, to-dos) from the To-dos tab. */

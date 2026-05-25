@@ -47,11 +47,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, note: "outside send window; re-enqueued", retryInSeconds: secs });
   }
 
-  const pending = await db
-    .select()
-    .from(contacts)
-    .where(and(eq(contacts.campaignId, campaignId), eq(contacts.status, "pending"), eq(contacts.optedOut, false)))
-    .limit(DRAIN_BATCH);
+  // Only text contacts meeting the campaign's minimum fit score (if set).
+  const minScore = campaign.minScoreToSend;
+  const sendable = and(
+    eq(contacts.campaignId, campaignId),
+    eq(contacts.status, "pending"),
+    eq(contacts.optedOut, false),
+    minScore ? sql`${contacts.qualificationScore} >= ${minScore}` : undefined,
+  );
+
+  const pending = await db.select().from(contacts).where(sendable).limit(DRAIN_BATCH);
 
   let sent = 0;
   let failed = 0;
@@ -71,7 +76,7 @@ export async function POST(request: Request) {
   const [{ remaining }] = await db
     .select({ remaining: sql<number>`count(*)::int` })
     .from(contacts)
-    .where(and(eq(contacts.campaignId, campaignId), eq(contacts.status, "pending"), eq(contacts.optedOut, false)));
+    .where(sendable);
 
   if (remaining > 0) {
     // Keep going: re-enqueue another pass shortly.

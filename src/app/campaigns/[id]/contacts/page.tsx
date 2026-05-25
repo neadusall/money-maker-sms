@@ -10,9 +10,12 @@ import {
   deleteAllContacts,
   clearSuppressionList,
   validateExistingContacts,
+  scoreCampaignContacts,
+  setMinScore,
 } from "@/lib/actions";
 import { formatPhone } from "@/lib/phone";
 import { ConfirmButton } from "@/components/ConfirmButton";
+import { ScoreBadge } from "@/components/ScoreBadge";
 import { AutoRefresh } from "@/components/AutoRefresh";
 
 export const dynamic = "force-dynamic";
@@ -33,7 +36,8 @@ export default async function ContactsPage({
     .select()
     .from(contacts)
     .where(eq(contacts.campaignId, id))
-    .orderBy(desc(contacts.createdAt))
+    // Highest fit first; unscored fall to the bottom.
+    .orderBy(sql`${contacts.qualificationScore} desc nulls last`, desc(contacts.createdAt))
     .limit(500);
 
   // Which of these contacts' numbers were texted in OTHER campaigns (for the "Texted before" badge).
@@ -57,24 +61,36 @@ export default async function ContactsPage({
     .where(eq(suppressedNumbers.campaignId, id));
   const suppressedCount = suppression?.n ?? 0;
 
+  const minScore = campaign.minScoreToSend ?? 0;
   const [statusAgg] = await db
     .select({
+      total: sql<number>`count(*)::int`,
       validating: sql<number>`count(*) filter (where ${contacts.status} = 'validating')::int`,
       sendable: sql<number>`count(*) filter (where ${contacts.status} in ('pending','failed'))::int`,
+      scored: sql<number>`count(*) filter (where ${contacts.qualificationScore} is not null)::int`,
+      // pending contacts that meet the current fit bar (who'd actually be texted)
+      qualify: sql<number>`count(*) filter (where ${contacts.status} = 'pending' and ${contacts.optedOut} = false and (${minScore} = 0 or ${contacts.qualificationScore} >= ${minScore}))::int`,
     })
     .from(contacts)
     .where(eq(contacts.campaignId, id));
+  const totalCount = statusAgg?.total ?? 0;
   const validatingCount = statusAgg?.validating ?? 0;
   const sendableCount = statusAgg?.sendable ?? 0;
+  const scoredCount = statusAgg?.scored ?? 0;
+  const qualifyCount = statusAgg?.qualify ?? 0;
+  const unscoredCount = totalCount - scoredCount;
 
   const upload = uploadContactsCsv.bind(null, id);
   const clearAll = deleteAllContacts.bind(null, id);
   const clearSuppression = clearSuppressionList.bind(null, id);
   const validateNow = validateExistingContacts.bind(null, id);
+  const scoreFit = scoreCampaignContacts.bind(null, id);
+  const setBar = setMinScore.bind(null, id);
+  const SCORE_TIERS = [0, 25, 50, 75, 80, 90, 100];
 
   return (
     <section className="grid gap-6">
-      {validatingCount > 0 ? <AutoRefresh intervalMs={5000} /> : null}
+      {validatingCount > 0 || unscoredCount > 0 ? <AutoRefresh intervalMs={5000} /> : null}
 
       {uploadAdded !== null ? (
         <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
@@ -153,6 +169,65 @@ export default async function ContactsPage({
         </div>
       ) : null}
 
+      {totalCount > 0 ? (
+        <div className="rounded-lg border border-zinc-200 bg-white p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-zinc-900">Candidate fit scoring</h2>
+              <p className="mt-0.5 text-xs text-zinc-500">
+                AI scores each contact 1–100 against this role&apos;s description. Set a minimum to text only qualified
+                candidates.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {unscoredCount > 0 ? (
+                <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500">
+                  <svg className="h-3.5 w-3.5 animate-spin text-sky-500" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+                    <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                  </svg>
+                  Scored {scoredCount}/{totalCount}
+                </span>
+              ) : (
+                <span className="text-xs text-emerald-600">All {scoredCount} scored</span>
+              )}
+              <form action={scoreFit}>
+                <button className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50">
+                  {unscoredCount > 0 ? "Score now" : "Re-score new"}
+                </button>
+              </form>
+            </div>
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <span className="text-xs font-medium text-zinc-600">Only text fit ≥</span>
+            {SCORE_TIERS.map((tier) => (
+              <form key={tier} action={setBar}>
+                <input type="hidden" name="minScore" value={tier} />
+                <button
+                  className={
+                    "rounded-full px-2.5 py-1 text-xs font-medium " +
+                    (minScore === tier
+                      ? "bg-sky-600 text-white"
+                      : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200")
+                  }
+                >
+                  {tier === 0 ? "Off" : `${tier}`}
+                </button>
+              </form>
+            ))}
+          </div>
+
+          {minScore > 0 ? (
+            <div className="mt-3 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
+              Sends go to the <strong>{qualifyCount}</strong> pending contact{qualifyCount === 1 ? "" : "s"} scoring{" "}
+              <strong>≥ {minScore}</strong>. Anyone below the bar is skipped (not deleted).
+              {unscoredCount > 0 ? " Scoring is still running — wait for it to finish before sending." : ""}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       <form action={upload} className="rounded-lg border border-dashed border-zinc-300 bg-white p-5">
         <label className="block">
           <span className="block text-sm font-medium">CSV file</span>
@@ -190,6 +265,7 @@ export default async function ContactsPage({
                 <th className="px-3 py-2">Phone</th>
                 <th className="px-3 py-2">Company</th>
                 <th className="px-3 py-2">Title</th>
+                <th className="px-3 py-2">Fit</th>
                 <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2">Error</th>
                 <th className="px-3 py-2"></th>
@@ -221,6 +297,13 @@ export default async function ContactsPage({
                     <td className="px-3 py-2 font-mono text-xs">{formatPhone(c.phone)}</td>
                     <td className="px-3 py-2">{c.company ?? <span className="text-zinc-400">—</span>}</td>
                     <td className="px-3 py-2">{c.jobTitle ?? <span className="text-zinc-400">—</span>}</td>
+                    <td className="px-3 py-2">
+                      {c.qualificationScore != null ? (
+                        <ScoreBadge score={c.qualificationScore} reason={c.qualificationReason} label="" />
+                      ) : (
+                        <span className="text-zinc-300">—</span>
+                      )}
+                    </td>
                     <td className="px-3 py-2">
                       <StatusBadge status={c.status} optedOut={c.optedOut} />
                     </td>

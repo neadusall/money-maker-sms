@@ -118,6 +118,9 @@ export const campaigns = pgTable("campaigns", {
   // so Ryan can revisit exactly what search produced these contacts.
   salesNavUrl: text("sales_nav_url"),
 
+  // Only text contacts whose fit score is >= this (null = no fit filter).
+  minScoreToSend: integer("min_score_to_send"),
+
   fromNumber: text("from_number"),
 
   sendWindowStart: text("send_window_start").default("09:00").notNull(),

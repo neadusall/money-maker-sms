@@ -26,6 +26,7 @@ export async function scoreCandidate(args: {
   campaign: Campaign;
   contact: Contact;
   recentHistory?: { direction: "outbound" | "inbound"; body: string }[];
+  model?: string;
 }): Promise<QualScore | null> {
   if (!process.env.ANTHROPIC_API_KEY) return null;
   if (!args.campaign.positionSummary?.trim()) return null;
@@ -59,7 +60,7 @@ export async function scoreCandidate(args: {
   ];
 
   const response = await anthropic().messages.create({
-    model: CLAUDE_MODEL,
+    model: args.model ?? CLAUDE_MODEL,
     max_tokens: 400,
     system: SYSTEM,
     messages: [{ role: "user", content: userBlocks }],

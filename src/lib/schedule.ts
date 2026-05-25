@@ -43,6 +43,15 @@ export async function enqueueValidationDrain(campaignId: string, delaySeconds: n
   });
 }
 
+/** Enqueue (or re-enqueue) a fit-scoring drain pass via QStash. */
+export async function enqueueScoreDrain(campaignId: string, delaySeconds: number): Promise<void> {
+  await qstashClient().publishJSON({
+    url: `${publicBaseUrl()}/api/qstash/score-drain`,
+    body: { campaignId },
+    delay: delaySeconds,
+  });
+}
+
 function randInt(minInclusive: number, maxInclusive: number): number {
   return Math.floor(Math.random() * (maxInclusive - minInclusive + 1)) + minInclusive;
 }
