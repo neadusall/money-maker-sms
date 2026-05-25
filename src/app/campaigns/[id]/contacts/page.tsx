@@ -14,7 +14,6 @@ import {
   setMinScore,
 } from "@/lib/actions";
 import { formatPhone } from "@/lib/phone";
-import { REGIONS } from "@/lib/region";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { ScoreBadge } from "@/components/ScoreBadge";
 import { LocationBadge } from "@/components/LocationBadge";
@@ -36,20 +35,14 @@ export default async function ContactsPage({
 
   const minScore = campaign.minScoreToSend ?? 0;
 
+  // Show the WHOLE list (the fit bar only decides who gets texted, not who's shown).
   const rows = await db
     .select()
     .from(contacts)
-    .where(
-      and(
-        eq(contacts.campaignId, id),
-        // When a fit bar is selected, the list shows ONLY qualifying candidates
-        // (the same ones that will be texted).
-        minScore > 0 ? sql`${contacts.qualificationScore} >= ${minScore}` : undefined,
-      ),
-    )
+    .where(eq(contacts.campaignId, id))
     // Highest fit first; unscored fall to the bottom.
     .orderBy(sql`${contacts.qualificationScore} desc nulls last`, desc(contacts.createdAt))
-    .limit(500);
+    .limit(2000);
 
   // Which of these contacts' numbers were texted in OTHER campaigns (for the "Texted before" badge).
   const phones = rows.map((r) => r.phone);
@@ -261,19 +254,9 @@ export default async function ContactsPage({
           <input type="checkbox" name="skipPreviouslyTexted" defaultChecked className="mt-0.5 rounded border-zinc-300" />
           <span>Skip people I&apos;ve already texted in another campaign (uncheck to message them again)</span>
         </label>
-        <div className="mt-3">
-          <span className="block text-sm font-medium text-zinc-700">
-            Only upload contacts in these regions <span className="text-zinc-400">(leave all checked = everyone)</span>
-          </span>
-          <div className="mt-1.5 flex flex-wrap gap-3">
-            {REGIONS.map((r) => (
-              <label key={r.key} className="flex items-center gap-1.5 text-sm text-zinc-700">
-                <input type="checkbox" name={`region_${r.key}`} defaultChecked className="rounded border-zinc-300" />
-                {r.label}
-              </label>
-            ))}
-          </div>
-        </div>
+        <p className="mt-2 text-xs text-zinc-500">
+          The entire list uploads and auto-scores. You then pick who to text by fit score.
+        </p>
         <button className="mt-4 rounded-md bg-zinc-900 px-3 py-1.5 text-sm text-white hover:bg-zinc-800">
           Upload contacts
         </button>
@@ -281,9 +264,7 @@ export default async function ContactsPage({
 
       {rows.length === 0 ? (
         <div className="rounded-lg border border-zinc-200 bg-white p-6 text-center text-sm text-zinc-500">
-          {minScore > 0
-            ? `No candidates score ≥ ${minScore}. Lower the fit bar (or set it to Off) to see more.`
-            : "No contacts yet. Upload a CSV to get started."}
+          No contacts yet. Upload a CSV to get started.
         </div>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white">

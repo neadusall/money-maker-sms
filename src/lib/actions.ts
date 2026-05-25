@@ -190,6 +190,7 @@ export async function createCampaign(formData: FormData) {
       recruiterEmail: str(formData, "recruiterEmail"),
       fromNumber: str(formData, "fromNumber"),
       salesNavUrl: str(formData, "salesNavUrl"),
+      targetRegion: str(formData, "targetRegion"),
       sendWindowStart: str(formData, "sendWindowStart") ?? "09:00",
       sendWindowEnd: str(formData, "sendWindowEnd") ?? "19:00",
     })
@@ -299,6 +300,7 @@ export async function updateCampaign(campaignId: string, formData: FormData) {
       recruiterEmail: str(formData, "recruiterEmail"),
       fromNumber: str(formData, "fromNumber"),
       salesNavUrl: str(formData, "salesNavUrl"),
+      targetRegion: str(formData, "targetRegion"),
       sendWindowStart: str(formData, "sendWindowStart") ?? undefined,
       sendWindowEnd: str(formData, "sendWindowEnd") ?? undefined,
       updatedAt: new Date(),
