@@ -121,6 +121,10 @@ export const campaigns = pgTable("campaigns", {
   // Only text contacts whose fit score is >= this (null = no fit filter).
   minScoreToSend: integer("min_score_to_send"),
 
+  // Compact LLM-generated scoring rubric distilled from positionSummary, reused
+  // for every candidate score (keeps prompts small + within rate limits).
+  scoringRubric: text("scoring_rubric"),
+
   fromNumber: text("from_number"),
 
   sendWindowStart: text("send_window_start").default("09:00").notNull(),

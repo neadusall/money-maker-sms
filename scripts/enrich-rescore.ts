@@ -1,16 +1,17 @@
 import "dotenv/config";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "../src/db/client";
-import { contacts, campaigns } from "../src/db/schema";
+import { contacts, campaigns, type Campaign } from "../src/db/schema";
 import { scoreContactDeep } from "../src/lib/qualify";
+import { ensureRubric } from "../src/lib/rubric";
 
 const BULK_MODEL = "claude-haiku-4-5-20251001";
-const CONCURRENCY = 4;
+const CONCURRENCY = 3;
 
 /**
- * One-time: enrich every contact that has a LinkedIn URL (real work history)
- * and re-score them. Contacts without a URL keep their title+company score and
- * are just marked enriched_at so they aren't reprocessed.
+ * One-time: enrich every contact with a LinkedIn URL (real work history) and
+ * re-score against the campaign's compact rubric. Reuses cached profiles (no
+ * double RapidAPI charge). Failures are left un-marked so they can be retried.
  */
 async function main() {
   const rows = await db
@@ -20,9 +21,17 @@ async function main() {
     .where(eq(contacts.optedOut, false));
 
   console.log(`Processing ${rows.length} contacts (concurrency ${CONCURRENCY})...`);
+  const rubricCache = new Map<string, string | undefined>();
   let enriched = 0;
   let rescored = 0;
-  let done = 0;
+  let failed = 0;
+
+  async function getRubric(campaign: Campaign): Promise<string | undefined> {
+    if (rubricCache.has(campaign.id)) return rubricCache.get(campaign.id);
+    const r = (await ensureRubric(campaign).catch(() => null)) ?? undefined;
+    rubricCache.set(campaign.id, r);
+    return r;
+  }
 
   async function handle(r: (typeof rows)[number]) {
     const { contact, campaign } = r;
@@ -31,34 +40,43 @@ async function main() {
       return;
     }
     try {
-      const { score, enriched: prof, fetched } = await scoreContactDeep({ campaign, contact, model: BULK_MODEL });
-      await db
-        .update(contacts)
-        .set({
-          qualificationScore: score ? score.score : contact.qualificationScore,
-          qualificationReason: score ? score.reason : contact.qualificationReason,
-          enrichedAt: new Date(),
-          ...(fetched ? { enrichedProfile: (prof as unknown as Record<string, unknown>) ?? null } : {}),
-        })
-        .where(eq(contacts.id, contact.id));
-      if (prof) enriched++;
-      if (score) rescored++;
+      const rubric = await getRubric(campaign);
+      const { score, enriched: prof, fetched } = await scoreContactDeep({ campaign, contact, model: BULK_MODEL, rubric });
+      if (score) {
+        await db
+          .update(contacts)
+          .set({
+            qualificationScore: score.score,
+            qualificationReason: score.reason,
+            enrichedAt: new Date(),
+            ...(fetched ? { enrichedProfile: (prof as unknown as Record<string, unknown>) ?? null } : {}),
+          })
+          .where(eq(contacts.id, contact.id));
+        if (prof) enriched++;
+        rescored++;
+      } else {
+        // Cache the fetched profile but leave enriched_at null so it retries.
+        if (fetched && prof) {
+          await db.update(contacts).set({ enrichedProfile: prof as unknown as Record<string, unknown> }).where(eq(contacts.id, contact.id));
+          enriched++;
+        }
+        failed++;
+      }
     } catch (e) {
-      console.error(`  ! ${contact.id}:`, e instanceof Error ? e.message : e);
-      await db.update(contacts).set({ enrichedAt: new Date() }).where(eq(contacts.id, contact.id));
+      failed++;
+      console.error(`  ! ${contact.id}:`, e instanceof Error ? e.message.slice(0, 80) : e);
     }
   }
 
-  // Simple concurrency pool.
   for (let i = 0; i < rows.length; i += CONCURRENCY) {
     await Promise.all(rows.slice(i, i + CONCURRENCY).map(handle));
-    done = Math.min(i + CONCURRENCY, rows.length);
+    const done = Math.min(i + CONCURRENCY, rows.length);
     if (done % 60 === 0 || done === rows.length) {
-      console.log(`  ...${done}/${rows.length}  (enriched ${enriched}, rescored ${rescored})`);
+      console.log(`  ...${done}/${rows.length}  (enriched ${enriched}, rescored ${rescored}, failed ${failed})`);
     }
   }
 
-  console.log(`\nDone. Enriched ${enriched} profiles, re-scored ${rescored}.`);
+  console.log(`\nDone. Enriched ${enriched}, re-scored ${rescored}, failed ${failed}.`);
   process.exit(0);
 }
 main().catch((e) => { console.error(e); process.exit(1); });

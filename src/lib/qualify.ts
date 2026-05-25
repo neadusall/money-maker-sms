@@ -10,6 +10,29 @@ const ScoreSchema = z.object({
 });
 export type QualScore = z.infer<typeof ScoreSchema>;
 
+const RUBRIC_SYSTEM = `You are an expert recruiter. Distill the following job description into a COMPACT scoring rubric a screener can apply quickly. Output 6-10 short bullet lines covering: the role title & seniority, required function/domain, must-have experience (years, type), target industries, and any hard disqualifiers. Keep it under ~250 words. Output plain text bullets only — no preamble.`;
+
+/** Distill a long position summary into a compact rubric (one-time per campaign). */
+export async function buildScoringRubric(positionSummary: string): Promise<string | null> {
+  if (!process.env.ANTHROPIC_API_KEY || !positionSummary.trim()) return null;
+  try {
+    const response = await anthropic().messages.create({
+      model: CLAUDE_MODEL,
+      max_tokens: 600,
+      system: RUBRIC_SYSTEM,
+      messages: [{ role: "user", content: positionSummary }],
+    });
+    const text = response.content
+      .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("")
+      .trim();
+    return text || null;
+  } catch {
+    return null;
+  }
+}
+
 const SYSTEM = `You are an expert recruiter screening candidates for a specific role.
 Given the job's position summary and what is known about a candidate (current title,
 company, location, and any signals from their SMS conversation), rate how well the
@@ -29,9 +52,10 @@ export async function scoreCandidate(args: {
   recentHistory?: { direction: "outbound" | "inbound"; body: string }[];
   model?: string;
   enrichmentText?: string;
+  rubric?: string;
 }): Promise<QualScore | null> {
   if (!process.env.ANTHROPIC_API_KEY) return null;
-  if (!args.campaign.positionSummary?.trim()) return null;
+  if (!args.rubric && !args.campaign.positionSummary?.trim()) return null;
 
   const c = args.contact;
   const who = [
@@ -54,7 +78,9 @@ export async function scoreCandidate(args: {
   const userBlocks: Anthropic.Messages.TextBlockParam[] = [
     {
       type: "text",
-      text: `JOB / POSITION SUMMARY\n${args.campaign.positionSummary}`,
+      text: args.rubric
+        ? `ROLE REQUIREMENTS (scoring rubric)\n${args.rubric}`
+        : `JOB / POSITION SUMMARY\n${args.campaign.positionSummary}`,
       cache_control: { type: "ephemeral" },
     },
     {
@@ -103,6 +129,7 @@ export async function scoreContactDeep(args: {
   contact: Contact;
   recentHistory?: { direction: "outbound" | "inbound"; body: string }[];
   model?: string;
+  rubric?: string;
 }): Promise<{ score: QualScore | null; enriched: EnrichedProfile | null; fetched: boolean }> {
   let enriched = (args.contact.enrichedProfile as EnrichedProfile | null) ?? null;
   let fetched = false;

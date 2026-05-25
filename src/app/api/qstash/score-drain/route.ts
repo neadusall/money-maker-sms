@@ -5,6 +5,7 @@ import { db } from "@/db/client";
 import { campaigns, contacts } from "@/db/schema";
 import { verifyQStashSignature, enqueueScoreDrain } from "@/lib/schedule";
 import { scoreContactDeep } from "@/lib/qualify";
+import { ensureRubric } from "@/lib/rubric";
 import { isEnrichmentConfigured } from "@/lib/enrich";
 
 export const maxDuration = 60;
@@ -37,12 +38,15 @@ export async function POST(request: Request) {
 
   const batch = await db.select().from(contacts).where(selector).limit(SCORE_BATCH);
 
+  // Compact rubric (generated once per campaign) keeps each scoring prompt small.
+  const rubric = (await ensureRubric(campaign).catch(() => null)) ?? undefined;
+
   // Process the batch concurrently so each drain pass returns fast (enrichment
   // adds a ~3s API call per contact; sequential would risk the callback timeout).
   let scored = 0;
   await Promise.all(
     batch.map(async (contact) => {
-      const { score, enriched, fetched } = await scoreContactDeep({ campaign, contact, model: BULK_MODEL }).catch(
+      const { score, enriched, fetched } = await scoreContactDeep({ campaign, contact, model: BULK_MODEL, rubric }).catch(
         () => ({ score: null, enriched: null, fetched: false }),
       );
       await db

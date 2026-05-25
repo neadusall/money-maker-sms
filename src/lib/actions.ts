@@ -50,6 +50,7 @@ import {
 import { sentimentOf } from "./sentiment";
 import { syncTodosForConversation } from "./todos";
 import { scoreContactDeep } from "./qualify";
+import { ensureRubric } from "./rubric";
 
 function str(formData: FormData, key: string): string | null {
   const v = formData.get(key);
@@ -718,10 +719,12 @@ async function classifyInboundSilent(args: {
     // Score their fit for the role (once) so it shows on To-dos + inbox —
     // using real LinkedIn work history when enrichment is configured.
     if (args.contact.qualificationScore == null) {
+      const rubric = (await ensureRubric(args.campaign).catch(() => null)) ?? undefined;
       const { score, enriched, fetched } = await scoreContactDeep({
         campaign: args.campaign,
         contact: args.contact,
         recentHistory: ordered,
+        rubric,
       }).catch(() => ({ score: null, enriched: null, fetched: false }));
       if (score) {
         await db

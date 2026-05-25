@@ -7,7 +7,9 @@ export function anthropic(): Anthropic {
   if (!process.env.ANTHROPIC_API_KEY) {
     throw new Error("ANTHROPIC_API_KEY is not set");
   }
-  cached = new Anthropic();
+  // Generous retries so bulk scoring rides through 429 rate-limit bursts
+  // (the SDK backs off and respects retry-after headers).
+  cached = new Anthropic({ maxRetries: 8 });
   return cached;
 }
 
