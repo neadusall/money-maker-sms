@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 
-const PUBLIC_PATHS = ["/login", "/verify-request", "/api/auth", "/api/webhooks", "/api/qstash"];
+const PUBLIC_PATHS = ["/login", "/verify-request", "/api/auth", "/api/webhooks", "/api/qstash", "/api/enter"];
 
 export default auth((req) => {
   const { pathname } = req.nextUrl;

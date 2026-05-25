@@ -15,6 +15,9 @@ function allowedEmails(): Set<string> {
 export const { handlers, signIn, signOut, auth } = NextAuth({
   adapter: DrizzleAdapter(db),
   trustHost: true,
+  // Long-lived database sessions so the instant-access link (and normal logins)
+  // keep you signed in for a year without re-authenticating.
+  session: { strategy: "database", maxAge: 60 * 60 * 24 * 365, updateAge: 60 * 60 * 24 },
   providers: [
     Nodemailer({
       server: {
