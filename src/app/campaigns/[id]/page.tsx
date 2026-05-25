@@ -40,6 +40,7 @@ export default async function CampaignDetail({
       optedOut: sql<number>`count(*) filter (where ${contacts.status} = 'opted_out')::int`,
       failed: sql<number>`count(*) filter (where ${contacts.status} = 'failed')::int`,
       emailsSent: sql<number>`count(*) filter (where ${contacts.positionEmailSentAt} is not null)::int`,
+      unscored: sql<number>`count(*) filter (where ${contacts.status} = 'pending' and ${contacts.optedOut} = false and ${contacts.qualificationScore} is null)::int`,
     })
     .from(contacts)
     .where(eq(contacts.campaignId, id));
@@ -76,6 +77,7 @@ export default async function CampaignDetail({
   const del = deleteCampaign.bind(null, id);
 
   const pending = stats?.pending ?? 0;
+  const unscored = stats?.unscored ?? 0;
   const total = stats?.total ?? 0;
   const sent = stats?.sent ?? 0;
   const delivered = stats?.delivered ?? 0;
@@ -160,12 +162,14 @@ export default async function CampaignDetail({
 
         <form action={send}>
           <button
-            disabled={pending === 0}
+            disabled={pending === 0 || unscored > 0}
             className="inline-flex items-center gap-1.5 rounded-lg bg-sky-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-zinc-300"
             title={
-              pending === 0
-                ? "Everyone in this campaign has already been messaged"
-                : `Texts the ${pending} contacts not yet messaged. Anyone already texted in this campaign is never contacted again.`
+              unscored > 0
+                ? `Scoring ${unscored} contacts — sending is paused until fit scores are ready`
+                : pending === 0
+                  ? "Everyone in this campaign has already been messaged"
+                  : `Texts the ${pending} contacts not yet messaged. Anyone already texted in this campaign is never contacted again.`
             }
           >
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
@@ -180,7 +184,21 @@ export default async function CampaignDetail({
         </div>
       </div>
 
-      {pending > 0 && (stats?.sent ?? 0) > 0 ? (
+      {unscored > 0 ? (
+        <div className="flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 p-4 text-sm text-violet-900">
+          <svg className="h-4 w-4 shrink-0 animate-spin text-violet-500" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+            <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+          </svg>
+          <span>
+            <strong>Scoring {unscored} candidate{unscored === 1 ? "" : "s"} for fit…</strong> Sending is paused until
+            everyone has a fit score, so you never text a prospect before they&apos;ve been evaluated. Updates
+            automatically — then set your fit bar on the Contacts page and send only to qualified candidates.
+          </span>
+        </div>
+      ) : null}
+
+      {pending > 0 && unscored === 0 && (stats?.sent ?? 0) > 0 ? (
         <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
           <strong>You&apos;re adding to a campaign that already ran.</strong> &quot;Send to {pending} unsent&quot; texts
           only the {pending} newly-added contact{pending === 1 ? "" : "s"} — the {stats?.sent} you&apos;ve already

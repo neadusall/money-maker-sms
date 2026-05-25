@@ -1,0 +1,3 @@
+import "dotenv/config"; import { sql } from "drizzle-orm"; import { db } from "../src/db/client";
+async function main(){const r=await db.execute(sql`SELECT count(*) FILTER (WHERE enriched_profile IS NOT NULL)::int enriched, count(*) FILTER (WHERE qualification_score IS NOT NULL)::int scored, count(*)::int total, round(avg(qualification_score))::int avg_score, count(*) FILTER (WHERE qualification_score>=75)::int strong FROM contacts WHERE campaign_id='ad981e17-ee13-489e-8ad3-ff6534d660d2'`);console.log(JSON.stringify(((r as {rows?:unknown[]}).rows??[])[0]));process.exit(0);}
+main().catch(e=>{console.error(e);process.exit(1);});

@@ -478,6 +478,25 @@ export async function startCampaignSend(campaignId: string): Promise<void> {
   const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId));
   if (!campaign) throw new Error("Campaign not found");
 
+  // Score-first guard: don't text anyone while fit-scoring is still running, so
+  // unqualified prospects are never messaged before they've been evaluated.
+  const [{ unscored }] = await db
+    .select({ unscored: sql<number>`count(*)::int` })
+    .from(contacts)
+    .where(
+      and(
+        eq(contacts.campaignId, campaignId),
+        eq(contacts.status, "pending"),
+        eq(contacts.optedOut, false),
+        sql`${contacts.qualificationScore} is null`,
+      ),
+    );
+  if (unscored > 0) {
+    console.warn(`[startCampaignSend ${campaignId}] blocked: ${unscored} contacts still being scored`);
+    revalidatePath(`/campaigns/${campaignId}`);
+    return;
+  }
+
   await db.update(campaigns).set({ status: "active", updatedAt: new Date() }).where(eq(campaigns.id, campaignId));
 
   if (isQStashConfigured()) {

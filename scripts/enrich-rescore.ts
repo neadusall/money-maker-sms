@@ -5,7 +5,7 @@ import { contacts, campaigns, type Campaign } from "../src/db/schema";
 import { scoreContactDeep } from "../src/lib/qualify";
 import { ensureRubric } from "../src/lib/rubric";
 
-const BULK_MODEL = "claude-haiku-4-5-20251001";
+const BULK_MODEL = "claude-sonnet-4-6";
 const CONCURRENCY = 3;
 
 /**

@@ -12,7 +12,7 @@ export const maxDuration = 60;
 
 const SCORE_BATCH = 12;
 // Cheaper/faster model for bulk list scoring.
-const BULK_MODEL = "claude-haiku-4-5-20251001";
+const BULK_MODEL = "claude-sonnet-4-6";
 
 export async function POST(request: Request) {
   const rawBody = await request.text();
