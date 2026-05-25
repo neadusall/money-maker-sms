@@ -5,6 +5,7 @@ import { todos, contacts, campaigns, type TodoChannel } from "@/db/schema";
 import { completeTodo, reopenTodo, deleteTodo, toggleCandidateReviewed } from "@/lib/actions";
 import { DeleteCorrespondenceButton } from "@/components/DeleteCorrespondenceButton";
 import { ScoreBadge } from "@/components/ScoreBadge";
+import { LocationBadge } from "@/components/LocationBadge";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { LiveBadge } from "@/components/LiveBadge";
 import { formatPhone } from "@/lib/phone";
@@ -50,6 +51,8 @@ export default async function TodosPage({
       reviewedAt: contacts.todosReviewedAt,
       score: contacts.qualificationScore,
       scoreReason: contacts.qualificationReason,
+      locationMatch: contacts.locationMatch,
+      locationRegion: contacts.locationRegion,
       campaignName: campaigns.name,
     })
     .from(todos)
@@ -76,6 +79,8 @@ export default async function TodosPage({
       reviewed: boolean;
       score: number | null;
       scoreReason: string | null;
+      locationMatch: boolean | null;
+      locationRegion: string | null;
       items: typeof rows;
     }
   >();
@@ -96,6 +101,8 @@ export default async function TodosPage({
         reviewed: r.reviewedAt != null,
         score: r.score,
         scoreReason: r.scoreReason,
+        locationMatch: r.locationMatch,
+        locationRegion: r.locationRegion,
         items: [] as typeof rows,
       };
     g.items.push(r);
@@ -184,6 +191,7 @@ export default async function TodosPage({
                     <div className="flex items-center gap-2">
                       <h3 className="font-semibold text-zinc-900">{g.name}</h3>
                       <ScoreBadge score={g.score} reason={g.scoreReason} />
+                      <LocationBadge match={g.locationMatch} region={g.locationRegion} />
                       {g.reviewed ? (
                         <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
                           Read

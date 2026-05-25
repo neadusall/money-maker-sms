@@ -1,4 +1,5 @@
 import type { Campaign } from "@/db/schema";
+import { REGIONS } from "@/lib/region";
 
 type Action = (formData: FormData) => Promise<void>;
 
@@ -108,6 +109,19 @@ export function CampaignForm({
                 is left out so they aren&apos;t contacted twice. Uncheck to message them again.
               </span>
             </label>
+            <div className="mt-3">
+              <span className="block text-xs font-medium text-zinc-700">
+                Only upload contacts in these regions <span className="text-zinc-400">(leave all checked = everyone)</span>
+              </span>
+              <div className="mt-1.5 flex flex-wrap gap-3">
+                {REGIONS.map((r) => (
+                  <label key={r.key} className="flex items-center gap-1.5 text-xs text-zinc-700">
+                    <input type="checkbox" name={`region_${r.key}`} defaultChecked className="rounded border-zinc-300" />
+                    {r.label}
+                  </label>
+                ))}
+              </div>
+            </div>
             <p className="mt-2 text-xs text-zinc-500">
               Recognized columns: first name, last name, company, job title, <strong>phone (required)</strong>, email,
               linkedin, location. Any other column becomes a custom merge field like <code>{`{your_column}`}</code>.

@@ -122,6 +122,10 @@ export const campaigns = pgTable("campaigns", {
   // Only text contacts whose fit score is >= this (null = no fit filter).
   minScoreToSend: integer("min_score_to_send"),
 
+  // Target geographic region for this role (used as a modest scoring signal +
+  // a location checkmark). e.g. "East Coast", "West Coast", "Midwest", "Central States".
+  targetRegion: text("target_region"),
+
   // Compact LLM-generated scoring rubric distilled from positionSummary, reused
   // for every candidate score (keeps prompts small + within rate limits).
   scoringRubric: text("scoring_rubric"),
@@ -178,6 +182,11 @@ export const contacts = pgTable(
     // Cached LinkedIn profile (work history, education) from the enrichment API.
     enrichedProfile: jsonb("enriched_profile").$type<Record<string, unknown>>(),
     enrichedAt: timestamp("enriched_at", { withTimezone: true }),
+
+    // Detected US region from the candidate's location, + whether it matches the
+    // campaign's target region (the location checkmark).
+    locationRegion: text("location_region"),
+    locationMatch: boolean("location_match"),
 
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()

@@ -6,6 +6,7 @@ import { anthropic, CLAUDE_MODEL } from "./anthropic";
 import { contacts as contactsTable, type Campaign, type Contact } from "@/db/schema";
 import { enrichLinkedIn, enrichmentToText, isEnrichmentConfigured, type EnrichedProfile } from "./enrich";
 import { recordLlmUsage } from "./usage";
+import { regionForLocation } from "./region";
 
 const ScoreSchema = z.object({
   score: z.number().int().min(1).max(100),
@@ -147,7 +148,13 @@ export async function scoreContactDeep(args: {
   recentHistory?: { direction: "outbound" | "inbound"; body: string }[];
   model?: string;
   rubric?: string;
-}): Promise<{ score: QualScore | null; enriched: EnrichedProfile | null; fetched: boolean }> {
+}): Promise<{
+  score: QualScore | null;
+  enriched: EnrichedProfile | null;
+  fetched: boolean;
+  locationRegion: string | null;
+  locationMatch: boolean | null;
+}> {
   let enriched = (args.contact.enrichedProfile as EnrichedProfile | null) ?? null;
   let fetched = false;
   if (!enriched && isEnrichmentConfigured() && args.contact.linkedinUrl) {
@@ -169,5 +176,22 @@ export async function scoreContactDeep(args: {
   }
   const enrichmentText = enriched ? enrichmentToText(enriched) : undefined;
   const score = await scoreCandidate({ ...args, enrichmentText });
-  return { score, enriched, fetched };
+
+  // Location signal: detect region from the (enriched or CSV) location, compare
+  // to the campaign's target region, and apply a MODEST score nudge.
+  const locStr = enriched?.location ?? args.contact.location ?? null;
+  const locationRegion = regionForLocation(locStr);
+  let locationMatch: boolean | null = null;
+  const target = args.campaign.targetRegion;
+  if (target) {
+    const targets = target.split(",");
+    locationMatch = locationRegion != null && targets.includes(locationRegion);
+    if (score) {
+      // small bump if in-region; small penalty only when we KNOW it's out of region.
+      const adj = locationMatch ? 3 : locationRegion != null ? -6 : 0;
+      score.score = Math.max(1, Math.min(100, score.score + adj));
+    }
+  }
+
+  return { score, enriched, fetched, locationRegion, locationMatch };
 }

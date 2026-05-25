@@ -41,13 +41,15 @@ async function main() {
     }
     try {
       const rubric = await getRubric(campaign);
-      const { score, enriched: prof, fetched } = await scoreContactDeep({ campaign, contact, model: BULK_MODEL, rubric });
+      const { score, enriched: prof, fetched, locationRegion, locationMatch } = await scoreContactDeep({ campaign, contact, model: BULK_MODEL, rubric });
       if (score) {
         await db
           .update(contacts)
           .set({
             qualificationScore: score.score,
             qualificationReason: score.reason,
+            locationRegion,
+            locationMatch,
             enrichedAt: new Date(),
             ...(fetched ? { enrichedProfile: (prof as unknown as Record<string, unknown>) ?? null } : {}),
           })

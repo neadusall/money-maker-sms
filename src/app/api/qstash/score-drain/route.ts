@@ -46,14 +46,19 @@ export async function POST(request: Request) {
   let scored = 0;
   await Promise.all(
     batch.map(async (contact) => {
-      const { score, enriched, fetched } = await scoreContactDeep({ campaign, contact, model: BULK_MODEL, rubric }).catch(
-        () => ({ score: null, enriched: null, fetched: false }),
-      );
+      const { score, enriched, fetched, locationRegion, locationMatch } = await scoreContactDeep({
+        campaign,
+        contact,
+        model: BULK_MODEL,
+        rubric,
+      }).catch(() => ({ score: null, enriched: null, fetched: false, locationRegion: null, locationMatch: null }));
       await db
         .update(contacts)
         .set({
           qualificationScore: score ? score.score : 0,
           qualificationReason: score ? score.reason : "could not score",
+          locationRegion,
+          locationMatch,
           // Mark processed so we don't reprocess; cache the fetched profile.
           enrichedAt: new Date(),
           ...(fetched ? { enrichedProfile: (enriched as unknown as Record<string, unknown>) ?? null } : {}),

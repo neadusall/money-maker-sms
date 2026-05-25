@@ -14,8 +14,10 @@ import {
   setMinScore,
 } from "@/lib/actions";
 import { formatPhone } from "@/lib/phone";
+import { REGIONS } from "@/lib/region";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { ScoreBadge } from "@/components/ScoreBadge";
+import { LocationBadge } from "@/components/LocationBadge";
 import { AutoRefresh } from "@/components/AutoRefresh";
 
 export const dynamic = "force-dynamic";
@@ -25,7 +27,7 @@ export default async function ContactsPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ added?: string; prev?: string; dup?: string }>;
+  searchParams: Promise<{ added?: string; prev?: string; dup?: string; region?: string }>;
 }) {
   const { id } = await params;
   const sp = await searchParams;
@@ -63,6 +65,7 @@ export default async function ContactsPage({
   const uploadAdded = sp.added ? Number(sp.added) : null;
   const uploadPrev = sp.prev ? Number(sp.prev) : 0;
   const uploadDup = sp.dup ? Number(sp.dup) : 0;
+  const uploadRegion = sp.region ? Number(sp.region) : 0;
 
   const [suppression] = await db
     .select({ n: sql<number>`count(*)::int` })
@@ -109,6 +112,9 @@ export default async function ContactsPage({
           ) : null}
           {uploadPrev > 0 ? (
             <> {uploadPrev} skipped — already texted in another campaign.</>
+          ) : null}
+          {uploadRegion > 0 ? (
+            <> {uploadRegion} skipped — outside the selected region(s).</>
           ) : null}
           {uploadPrev > 0 ? (
             <span className="mt-1 block text-xs text-emerald-700">
@@ -255,6 +261,19 @@ export default async function ContactsPage({
           <input type="checkbox" name="skipPreviouslyTexted" defaultChecked className="mt-0.5 rounded border-zinc-300" />
           <span>Skip people I&apos;ve already texted in another campaign (uncheck to message them again)</span>
         </label>
+        <div className="mt-3">
+          <span className="block text-sm font-medium text-zinc-700">
+            Only upload contacts in these regions <span className="text-zinc-400">(leave all checked = everyone)</span>
+          </span>
+          <div className="mt-1.5 flex flex-wrap gap-3">
+            {REGIONS.map((r) => (
+              <label key={r.key} className="flex items-center gap-1.5 text-sm text-zinc-700">
+                <input type="checkbox" name={`region_${r.key}`} defaultChecked className="rounded border-zinc-300" />
+                {r.label}
+              </label>
+            ))}
+          </div>
+        </div>
         <button className="mt-4 rounded-md bg-zinc-900 px-3 py-1.5 text-sm text-white hover:bg-zinc-800">
           Upload contacts
         </button>
@@ -302,6 +321,7 @@ export default async function ContactsPage({
                             Texted before
                           </span>
                         ) : null}
+                        <LocationBadge match={c.locationMatch} region={c.locationRegion} />
                       </div>
                     </td>
                     <td className="px-3 py-2 font-mono text-xs">{formatPhone(c.phone)}</td>

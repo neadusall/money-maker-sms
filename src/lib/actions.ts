@@ -23,6 +23,7 @@ export async function signOutAction() {
   await signOut({ redirectTo: "/login" });
 }
 import { parseCsv, type ImportedContact } from "./csv";
+import { regionForLocation, type RegionKey } from "./region";
 import { alwaysAllowNumbers } from "./always-allow";
 import { seedContacts } from "./seed-contacts";
 import { renderTemplate, findUnmergedTokens } from "./merge";
@@ -65,6 +66,34 @@ function str(formData: FormData, key: string): string | null {
  *  - optionally drops anyone already texted in another campaign,
  *  - always-allow numbers are never dropped.
  */
+/** Region checkboxes selected on the upload form (none/all checked = no filter). */
+function selectedRegions(formData: FormData): RegionKey[] {
+  const keys: RegionKey[] = ["east", "west", "midwest", "central"];
+  return keys.filter((k) => formData.get(`region_${k}`) != null);
+}
+
+/** Keep only rows whose CSV location falls in one of the selected regions. */
+function filterByRegion(
+  rows: ImportedContact[],
+  regions: RegionKey[],
+): { rows: ImportedContact[]; outOfRegion: number } {
+  if (regions.length === 0 || regions.length >= 4) return { rows, outOfRegion: 0 };
+  const set = new Set(regions);
+  let outOfRegion = 0;
+  const kept = rows.filter((r) => {
+    const reg = regionForLocation(r.location);
+    if (reg && set.has(reg)) return true;
+    outOfRegion++;
+    return false;
+  });
+  return { rows: kept, outOfRegion };
+}
+
+/** Persisted target-region string for a campaign from the selected regions (null = all). */
+function regionsToTarget(regions: RegionKey[]): string | null {
+  return regions.length === 0 || regions.length >= 4 ? null : regions.join(",");
+}
+
 async function categorizeUpload(
   campaignId: string,
   rows: ImportedContact[],
@@ -185,13 +214,17 @@ export async function createCampaign(formData: FormData) {
   }
 
   const file = formData.get("csv");
-  let summary: { added: number; prev: number; dup: number } | null = null;
+  let summary: { added: number; prev: number; dup: number; region: number } | null = null;
   if (file instanceof File && file.size > 0) {
     const validate = formData.get("validateMobile") != null && isQStashConfigured();
     const skipPrev = formData.get("skipPreviouslyTexted") != null;
     const text = await file.text();
     const result = parseCsv(text);
-    const { toInsert, dupSkipped, prevSkipped } = await categorizeUpload(created.id, result.rows, skipPrev);
+    const regions = selectedRegions(formData);
+    const { rows: regionRows, outOfRegion } = filterByRegion(result.rows, regions);
+    const targetRegion = regionsToTarget(regions);
+    if (targetRegion) await db.update(campaigns).set({ targetRegion }).where(eq(campaigns.id, created.id));
+    const { toInsert, dupSkipped, prevSkipped } = await categorizeUpload(created.id, regionRows, skipPrev);
     if (toInsert.length > 0) {
       await db
         .insert(contacts)
@@ -215,13 +248,13 @@ export async function createCampaign(formData: FormData) {
       // Score everyone's fit for the role in the background.
       if (isQStashConfigured()) await enqueueScoreDrain(created.id, 3);
     }
-    summary = { added: toInsert.length, prev: prevSkipped, dup: dupSkipped };
+    summary = { added: toInsert.length, prev: prevSkipped, dup: dupSkipped, region: outOfRegion };
   }
 
   revalidatePath("/");
   if (summary) {
     redirect(
-      `/campaigns/${created.id}/contacts?added=${summary.added}&prev=${summary.prev}&dup=${summary.dup}`,
+      `/campaigns/${created.id}/contacts?added=${summary.added}&prev=${summary.prev}&dup=${summary.dup}&region=${summary.region}`,
     );
   }
   redirect(`/campaigns/${created.id}`);
@@ -289,7 +322,11 @@ export async function uploadContactsCsv(campaignId: string, formData: FormData):
   const skipPrev = formData.get("skipPreviouslyTexted") != null;
   const text = await file.text();
   const result = parseCsv(text);
-  const { toInsert, dupSkipped, prevSkipped } = await categorizeUpload(campaignId, result.rows, skipPrev);
+  const regions = selectedRegions(formData);
+  const { rows: regionRows, outOfRegion } = filterByRegion(result.rows, regions);
+  const targetRegion = regionsToTarget(regions);
+  if (targetRegion) await db.update(campaigns).set({ targetRegion }).where(eq(campaigns.id, campaignId));
+  const { toInsert, dupSkipped, prevSkipped } = await categorizeUpload(campaignId, regionRows, skipPrev);
 
   if (toInsert.length > 0) {
     await db
@@ -317,7 +354,7 @@ export async function uploadContactsCsv(campaignId: string, formData: FormData):
   revalidatePath("/");
   revalidatePath(`/campaigns/${campaignId}/contacts`);
   revalidatePath(`/campaigns/${campaignId}`);
-  redirect(`/campaigns/${campaignId}/contacts?added=${toInsert.length}&prev=${prevSkipped}&dup=${dupSkipped}`);
+  redirect(`/campaigns/${campaignId}/contacts?added=${toInsert.length}&prev=${prevSkipped}&dup=${dupSkipped}&region=${outOfRegion}`);
 }
 
 /** Re-validate existing pending/failed contacts: mark them validating and kick off the drain. */
@@ -742,18 +779,20 @@ async function classifyInboundSilent(args: {
     // using real LinkedIn work history when enrichment is configured.
     if (args.contact.qualificationScore == null) {
       const rubric = (await ensureRubric(args.campaign).catch(() => null)) ?? undefined;
-      const { score, enriched, fetched } = await scoreContactDeep({
+      const { score, enriched, fetched, locationRegion, locationMatch } = await scoreContactDeep({
         campaign: args.campaign,
         contact: args.contact,
         recentHistory: ordered,
         rubric,
-      }).catch(() => ({ score: null, enriched: null, fetched: false }));
+      }).catch(() => ({ score: null, enriched: null, fetched: false, locationRegion: null, locationMatch: null }));
       if (score) {
         await db
           .update(contacts)
           .set({
             qualificationScore: score.score,
             qualificationReason: score.reason,
+            locationRegion,
+            locationMatch,
             ...(fetched
               ? { enrichedProfile: (enriched as unknown as Record<string, unknown>) ?? null, enrichedAt: new Date() }
               : {}),
