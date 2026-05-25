@@ -80,7 +80,14 @@ export async function scoreCandidate(args: {
     const start = text.indexOf("{");
     const end = text.lastIndexOf("}");
     if (start === -1 || end === -1) return null;
-    return ScoreSchema.parse(JSON.parse(text.slice(start, end + 1)));
+    // Lenient parse: clamp the score and truncate the reason rather than
+    // rejecting a valid answer just because the model wrote a long reason.
+    const obj = JSON.parse(text.slice(start, end + 1)) as { score?: unknown; reason?: unknown };
+    let score = Math.round(Number(obj.score));
+    if (!Number.isFinite(score)) return null;
+    score = Math.max(1, Math.min(100, score));
+    const reason = String(obj.reason ?? "").slice(0, 280);
+    return { score, reason };
   } catch {
     return null;
   }

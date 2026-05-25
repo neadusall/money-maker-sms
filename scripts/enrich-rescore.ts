@@ -5,7 +5,7 @@ import { contacts, campaigns } from "../src/db/schema";
 import { scoreContactDeep } from "../src/lib/qualify";
 
 const BULK_MODEL = "claude-haiku-4-5-20251001";
-const CONCURRENCY = 6;
+const CONCURRENCY = 4;
 
 /**
  * One-time: enrich every contact that has a LinkedIn URL (real work history)
