@@ -7,11 +7,15 @@ import { Avatar } from "./Avatar";
 import { DeleteConversationButton } from "./DeleteConversationButton";
 import { formatPhone } from "@/lib/phone";
 import { shortRelative } from "@/lib/time";
+import { linkedinLink } from "@/lib/linkedin";
+import { ScoreBadge } from "./ScoreBadge";
 
 export type ConversationListItem = {
   id: string;
   status: "active" | "needs_attention" | "closed" | "opted_out";
   classification: string | null;
+  score: number | null;
+  scoreReason: string | null;
   lastMessageAt: string;
   unreadCount: number;
   contact: {
@@ -21,6 +25,7 @@ export type ConversationListItem = {
     phone: string;
     company: string | null;
     jobTitle: string | null;
+    linkedinUrl: string | null;
   };
   lastMessage: {
     direction: "outbound" | "inbound";
@@ -147,10 +152,23 @@ export function ConversationList({
               const previewPrefix = c.lastMessage?.direction === "outbound" ? "You: " : "";
               const preview = c.lastMessage ? previewPrefix + c.lastMessage.body : "(no messages)";
               const unread = c.unreadCount > 0;
+              const li = linkedinLink(c.contact.linkedinUrl, name, c.contact.company, c.contact.jobTitle);
 
               return (
                 <li key={c.id} className="relative">
-                  <div className="absolute right-2 top-1/2 z-10 -translate-y-1/2">
+                  <div className="absolute right-2 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5">
+                    <a
+                      href={li.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      title={li.direct ? `${name}'s LinkedIn profile` : `Find ${name} on LinkedIn`}
+                      className="rounded-md p-1.5 text-zinc-400 hover:bg-blue-50 hover:text-blue-600"
+                    >
+                      <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4">
+                        <path d="M20.5 2h-17A1.5 1.5 0 0 0 2 3.5v17A1.5 1.5 0 0 0 3.5 22h17a1.5 1.5 0 0 0 1.5-1.5v-17A1.5 1.5 0 0 0 20.5 2zM8 19H5v-9h3zM6.5 8.25A1.75 1.75 0 1 1 8.3 6.5a1.78 1.78 0 0 1-1.8 1.75zM19 19h-3v-4.74c0-1.42-.6-1.93-1.38-1.93A1.74 1.74 0 0 0 13 14.19a.66.66 0 0 0 0 .14V19h-3v-9h2.9v1.3a3.11 3.11 0 0 1 2.7-1.4c1.55 0 3.36.86 3.36 3.66z" />
+                      </svg>
+                    </a>
                     <DeleteConversationButton
                       campaignId={campaignId}
                       conversationId={c.id}
@@ -196,9 +214,14 @@ export function ConversationList({
                             </span>
                           ) : null}
                         </div>
-                        {c.classification ? (
-                          <div className="mt-1 inline-block rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-zinc-600">
-                            {c.classification.replace(/_/g, " ")}
+                        {c.classification || c.score != null ? (
+                          <div className="mt-1 flex flex-wrap items-center gap-1">
+                            {c.classification ? (
+                              <span className="inline-block rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-zinc-600">
+                                {c.classification.replace(/_/g, " ")}
+                              </span>
+                            ) : null}
+                            <ScoreBadge score={c.score} reason={c.scoreReason} />
                           </div>
                         ) : null}
                         {c.status === "opted_out" ? (

@@ -114,6 +114,10 @@ export const campaigns = pgTable("campaigns", {
   recruiterEmail: text("recruiter_email"),
   approvedLanguage: text("approved_language"),
 
+  // The LinkedIn Sales Navigator search URL used to generate this list, saved
+  // so Ryan can revisit exactly what search produced these contacts.
+  salesNavUrl: text("sales_nav_url"),
+
   fromNumber: text("from_number"),
 
   sendWindowStart: text("send_window_start").default("09:00").notNull(),
@@ -157,6 +161,11 @@ export const contacts = pgTable(
     // Set when Ryan has reviewed this candidate's to-dos (the "I've read it"
     // checkmark on the To-dos tab). Null = not yet reviewed.
     todosReviewedAt: timestamp("todos_reviewed_at", { withTimezone: true }),
+
+    // LLM fit score (1-100) for this role, from their title/company + the
+    // conversation vs the position summary. Null = not yet scored.
+    qualificationScore: integer("qualification_score"),
+    qualificationReason: text("qualification_reason"),
 
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()

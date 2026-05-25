@@ -177,44 +177,58 @@ export default async function Dashboard() {
           </div>
 
           <h2 className="mt-8 text-sm font-semibold text-zinc-500">All campaigns</h2>
-          <ul className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <ul className="mt-3 flex flex-col gap-2">
             {rows.map((c) => {
               const del = deleteCampaign.bind(null, c.id);
               const replyRate = pct(c.replied, c.delivered);
               return (
-                <li key={c.id} className="group relative">
-                  <Link
-                    href={`/campaigns/${c.id}`}
-                    className="block rounded-2xl border border-zinc-200 bg-white p-5 pr-12 shadow-sm transition hover:border-zinc-300 hover:shadow-md"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <h3 className="line-clamp-2 font-semibold text-zinc-900">{c.name}</h3>
+                <li
+                  key={c.id}
+                  className="flex items-center gap-4 rounded-xl border border-zinc-200 bg-white px-4 py-3 shadow-sm transition hover:border-zinc-300 hover:shadow-md"
+                >
+                  {/* Name + quick links + status */}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Link href={`/campaigns/${c.id}`} className="truncate font-semibold text-zinc-900 hover:underline">
+                        {c.name}
+                      </Link>
+                      <Link
+                        href={`/campaigns/${c.id}/inbox`}
+                        title="Open inbox"
+                        className="inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-[11px] font-medium text-zinc-600 hover:bg-zinc-50"
+                      >
+                        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 13.5h3.86a2.25 2.25 0 0 1 2.012 1.244l.256.512a2.25 2.25 0 0 0 2.013 1.244h3.218a2.25 2.25 0 0 0 2.013-1.244l.256-.512a2.25 2.25 0 0 1 2.013-1.244h3.859m-19.5.338V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18v-4.162c0-.224-.034-.447-.1-.661L19.24 5.338a2.25 2.25 0 0 0-2.15-1.588H6.911a2.25 2.25 0 0 0-2.15 1.588L2.35 13.177a2.25 2.25 0 0 0-.1.661Z" />
+                        </svg>
+                        Inbox
+                        {c.needsAttention > 0 ? (
+                          <span className="ml-0.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-rose-500 px-1 text-[9px] font-semibold text-white">
+                            {c.needsAttention}
+                          </span>
+                        ) : null}
+                      </Link>
                       <StatusBadge status={c.status} />
                     </div>
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
-                      <span>
-                        {new Date(c.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-                      </span>
-                      <span>· {c.llmMode.replace(/_/g, " ")}</span>
-                      {c.needsAttention > 0 ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
-                          {c.needsAttention} need{c.needsAttention === 1 ? "s" : ""} you
-                        </span>
-                      ) : null}
+                    <div className="mt-0.5 text-xs text-zinc-400">
+                      {new Date(c.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                      {" · "}
+                      {c.llmMode.replace(/_/g, " ")}
                     </div>
-
-                    <dl className="mt-4 grid grid-cols-4 gap-1.5 text-center">
-                      <CardMetric label="Contacts" value={c.contactCount} />
-                      <CardMetric label="Sent" value={c.sentCount} />
-                      <CardMetric label="Reply" value={`${replyRate}%`} accent="violet" />
-                      <CardMetric label="Positive" value={c.senti.positive} accent="emerald" />
-                    </dl>
-
-                    <SentimentStrip senti={c.senti} />
-                  </Link>
-                  <div className="absolute right-3 top-3">
-                    <DeleteCampaignButton deleteAction={del} variant="icon" />
                   </div>
+
+                  {/* Inline metrics */}
+                  <div className="hidden items-center gap-5 sm:flex">
+                    <RowMetric label="Contacts" value={c.contactCount} />
+                    <RowMetric label="Sent" value={c.sentCount} />
+                    <RowMetric label="Reply" value={`${replyRate}%`} accent="violet" />
+                    <RowMetric label="Positive" value={c.senti.positive} accent="emerald" />
+                  </div>
+
+                  <div className="hidden w-24 shrink-0 lg:block">
+                    <SentimentStrip senti={c.senti} />
+                  </div>
+
+                  <DeleteCampaignButton deleteAction={del} variant="icon" />
                 </li>
               );
             })}
@@ -225,7 +239,7 @@ export default async function Dashboard() {
   );
 }
 
-function CardMetric({
+function RowMetric({
   label,
   value,
   accent,
@@ -235,14 +249,10 @@ function CardMetric({
   accent?: "violet" | "emerald";
 }) {
   const valueColor =
-    accent === "violet"
-      ? "text-violet-700"
-      : accent === "emerald"
-        ? "text-emerald-700"
-        : "text-zinc-900";
+    accent === "violet" ? "text-violet-700" : accent === "emerald" ? "text-emerald-700" : "text-zinc-900";
   return (
-    <div>
-      <div className={"text-lg font-semibold tabular-nums " + valueColor}>{value}</div>
+    <div className="text-center">
+      <div className={"text-base font-semibold tabular-nums " + valueColor}>{value}</div>
       <div className="text-[10px] uppercase tracking-wide text-zinc-400">{label}</div>
     </div>
   );
@@ -251,7 +261,7 @@ function CardMetric({
 function SentimentStrip({ senti }: { senti: Sentiment }) {
   const total = senti.positive + senti.neutral + senti.negative;
   if (total === 0) {
-    return <div className="mt-3 h-1.5 w-full rounded-full bg-zinc-100" />;
+    return <div className="h-1.5 w-full rounded-full bg-zinc-100" />;
   }
   const w = (n: number) => `${(n / total) * 100}%`;
   return (

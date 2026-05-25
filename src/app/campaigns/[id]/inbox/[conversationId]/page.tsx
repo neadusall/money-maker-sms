@@ -13,6 +13,7 @@ import { formatPhone } from "@/lib/phone";
 import { shortRelative, timeOfDay } from "@/lib/time";
 import { Avatar } from "@/components/Avatar";
 import { StatusIcon } from "@/components/StatusIcon";
+import { ScoreBadge } from "@/components/ScoreBadge";
 
 export const dynamic = "force-dynamic";
 
@@ -72,6 +73,7 @@ export default async function ThreadPage({
                   {convo.classification.replace(/_/g, " ")}
                 </span>
               ) : null}
+              <ScoreBadge score={contact.qualificationScore} reason={contact.qualificationReason} />
               {contact.optedOut || convo.status === "opted_out" ? (
                 <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-rose-700">
                   opted out

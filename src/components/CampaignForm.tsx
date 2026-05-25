@@ -63,6 +63,13 @@ export function CampaignForm({
             defaultValue={campaign?.sendWindowEnd ?? "19:00"}
           />
         </Row>
+        <Field
+          label="LinkedIn Sales Navigator search link (optional)"
+          name="salesNavUrl"
+          placeholder="https://www.linkedin.com/sales/search/people?..."
+          defaultValue={campaign?.salesNavUrl ?? ""}
+          help="Paste the Sales Navigator search you used to build this list, so you can revisit exactly who you targeted."
+        />
       </Card>
 
       {showContactUpload ? (

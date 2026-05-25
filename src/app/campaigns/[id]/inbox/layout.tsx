@@ -60,6 +60,8 @@ export default async function InboxLayout({
     id: r.id,
     status: r.status,
     classification: r.classification,
+    score: r.contact.qualificationScore,
+    scoreReason: r.contact.qualificationReason,
     lastMessageAt: r.lastMessageAt.toISOString(),
     unreadCount: Number(r.unreadCount),
     contact: {
@@ -69,6 +71,7 @@ export default async function InboxLayout({
       phone: r.contact.phone,
       company: r.contact.company,
       jobTitle: r.contact.jobTitle,
+      linkedinUrl: r.contact.linkedinUrl,
     },
     lastMessage: r.lastMessageBody
       ? { direction: r.lastMessageDirection ?? "outbound", body: r.lastMessageBody }

@@ -1,12 +1,14 @@
 import Link from "next/link";
-import { and, desc, eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { todos, contacts, campaigns, type TodoChannel } from "@/db/schema";
 import { completeTodo, reopenTodo, deleteTodo, toggleCandidateReviewed } from "@/lib/actions";
 import { DeleteCorrespondenceButton } from "@/components/DeleteCorrespondenceButton";
+import { ScoreBadge } from "@/components/ScoreBadge";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { LiveBadge } from "@/components/LiveBadge";
 import { formatPhone } from "@/lib/phone";
+import { linkedinLink } from "@/lib/linkedin";
 
 export const dynamic = "force-dynamic";
 
@@ -25,17 +27,16 @@ export default async function TodosPage({
 }) {
   const sp = await searchParams;
   const channel = sp.channel && sp.channel !== "all" ? sp.channel : null;
-  const view = sp.view === "done" ? "done" : "open";
 
-  const where = [eq(todos.status, view)];
-  if (channel) where.push(eq(todos.channel, channel as TodoChannel));
-
+  // Show ALL to-dos (open AND done) — marking one done just checks it off in
+  // place; it stays on the board until explicitly deleted with the trash icon.
   const rows = await db
     .select({
       id: todos.id,
       action: todos.action,
       channel: todos.channel,
       detail: todos.detail,
+      status: todos.status,
       createdAt: todos.createdAt,
       campaignId: todos.campaignId,
       conversationId: todos.conversationId,
@@ -47,14 +48,19 @@ export default async function TodosPage({
       jobTitle: contacts.jobTitle,
       linkedinUrl: contacts.linkedinUrl,
       reviewedAt: contacts.todosReviewedAt,
+      score: contacts.qualificationScore,
+      scoreReason: contacts.qualificationReason,
       campaignName: campaigns.name,
     })
     .from(todos)
     .innerJoin(contacts, eq(contacts.id, todos.contactId))
     .innerJoin(campaigns, eq(campaigns.id, todos.campaignId))
-    .where(and(...where))
+    .where(channel ? eq(todos.channel, channel as TodoChannel) : undefined)
     .orderBy(desc(todos.createdAt))
-    .limit(500);
+    .limit(1000);
+
+  const openCount = rows.filter((r) => r.status === "open").length;
+  const doneCount = rows.length - openCount;
 
   // Group by candidate so every person's open actions sit together.
   const groups = new Map<
@@ -68,6 +74,8 @@ export default async function TodosPage({
       linkedin: string;
       linkedinDirect: boolean;
       reviewed: boolean;
+      score: number | null;
+      scoreReason: string | null;
       items: typeof rows;
     }
   >();
@@ -86,6 +94,8 @@ export default async function TodosPage({
         linkedin: li.url,
         linkedinDirect: li.direct,
         reviewed: r.reviewedAt != null,
+        score: r.score,
+        scoreReason: r.scoreReason,
         items: [] as typeof rows,
       };
     g.items.push(r);
@@ -105,24 +115,8 @@ export default async function TodosPage({
             <LiveBadge />
           </div>
           <p className="mt-1 text-sm text-zinc-600">
-            {view === "open"
-              ? `${rows.length} open action${rows.length === 1 ? "" : "s"} across ${grouped.length} candidate${grouped.length === 1 ? "" : "s"}`
-              : `${rows.length} completed`}
+            {openCount} open · {doneCount} done across {grouped.length} candidate{grouped.length === 1 ? "" : "s"}
           </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Link
-            href={`/todos${channel ? `?channel=${channel}` : ""}`}
-            className={"rounded-lg px-3 py-1.5 text-sm font-medium " + (view === "open" ? "bg-zinc-900 text-white" : "border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50")}
-          >
-            Open
-          </Link>
-          <Link
-            href={`/todos?view=done${channel ? `&channel=${channel}` : ""}`}
-            className={"rounded-lg px-3 py-1.5 text-sm font-medium " + (view === "done" ? "bg-zinc-900 text-white" : "border border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50")}
-          >
-            Done
-          </Link>
         </div>
       </div>
 
@@ -131,7 +125,6 @@ export default async function TodosPage({
           const active = (channel ?? "all") === c.value;
           const qs = new URLSearchParams();
           if (c.value !== "all") qs.set("channel", c.value);
-          if (view === "done") qs.set("view", "done");
           const href = `/todos${qs.toString() ? `?${qs.toString()}` : ""}`;
           return (
             <Link
@@ -152,11 +145,9 @@ export default async function TodosPage({
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
             </svg>
           </div>
-          <h2 className="mt-4 text-lg font-semibold">{view === "open" ? "You're all caught up" : "Nothing here yet"}</h2>
+          <h2 className="mt-4 text-lg font-semibold">No to-dos yet</h2>
           <p className="mt-1 text-sm text-zinc-600">
-            {view === "open"
-              ? "Follow-ups from candidate replies will show up here automatically."
-              : "Completed items will appear here."}
+            Follow-ups from candidate replies will show up here automatically.
           </p>
         </div>
       ) : (
@@ -192,6 +183,7 @@ export default async function TodosPage({
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <h3 className="font-semibold text-zinc-900">{g.name}</h3>
+                      <ScoreBadge score={g.score} reason={g.scoreReason} />
                       {g.reviewed ? (
                         <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
                           Read
@@ -239,46 +231,48 @@ export default async function TodosPage({
               </div>
 
               <ul className="mt-3 divide-y divide-zinc-100">
-                {g.items.map((t) => {
-                  const complete = completeTodo.bind(null, t.id);
-                  const reopen = reopenTodo.bind(null, t.id);
-                  const del = deleteTodo.bind(null, t.id);
-                  return (
-                    <li key={t.id} className="flex items-start gap-3 py-2.5">
-                      <form action={view === "open" ? complete : reopen} className="pt-0.5">
-                        <button
-                          title={view === "open" ? "Mark done" : "Reopen"}
-                          className={
-                            "flex h-5 w-5 items-center justify-center rounded-full border transition " +
-                            (view === "open"
-                              ? "border-zinc-300 hover:border-emerald-500 hover:bg-emerald-50"
-                              : "border-emerald-500 bg-emerald-500 text-white")
-                          }
-                        >
-                          {view === "done" ? (
-                            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3">
-                              <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-                            </svg>
-                          ) : null}
-                        </button>
-                      </form>
-                      <div className="min-w-0 flex-1">
-                        <div className={"text-sm " + (view === "done" ? "text-zinc-400 line-through" : "text-zinc-900")}>
-                          {t.action}
+                {[...g.items]
+                  .sort((a, b) => Number(a.status === "done") - Number(b.status === "done"))
+                  .map((t) => {
+                    const done = t.status === "done";
+                    const toggle = (done ? reopenTodo : completeTodo).bind(null, t.id);
+                    const del = deleteTodo.bind(null, t.id);
+                    return (
+                      <li key={t.id} className="flex items-start gap-3 py-2.5">
+                        <form action={toggle} className="pt-0.5">
+                          <button
+                            title={done ? "Done — click to mark not done" : "Mark done (stays on the board)"}
+                            className={
+                              "flex h-5 w-5 items-center justify-center rounded-full border transition " +
+                              (done
+                                ? "border-emerald-500 bg-emerald-500 text-white"
+                                : "border-zinc-300 hover:border-emerald-500 hover:bg-emerald-50")
+                            }
+                          >
+                            {done ? (
+                              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                              </svg>
+                            ) : null}
+                          </button>
+                        </form>
+                        <div className="min-w-0 flex-1">
+                          <div className={"text-sm " + (done ? "text-zinc-400 line-through" : "text-zinc-900")}>
+                            {t.action}
+                          </div>
+                          {t.detail ? <div className="mt-0.5 text-xs text-zinc-500">{t.detail}</div> : null}
                         </div>
-                        {t.detail ? <div className="mt-0.5 text-xs text-zinc-500">{t.detail}</div> : null}
-                      </div>
-                      <ChannelChip channel={t.channel} />
-                      <form action={del} className="pt-0.5">
-                        <button title="Delete" className="rounded-md p-1 text-zinc-400 hover:bg-rose-50 hover:text-rose-600">
-                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
-                          </svg>
-                        </button>
-                      </form>
-                    </li>
-                  );
-                })}
+                        <ChannelChip channel={t.channel} />
+                        <form action={del} className="pt-0.5">
+                          <button title="Delete this to-do" className="rounded-md p-1 text-zinc-400 hover:bg-rose-50 hover:text-rose-600">
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                            </svg>
+                          </button>
+                        </form>
+                      </li>
+                    );
+                  })}
               </ul>
             </li>
           ))}
@@ -286,21 +280,6 @@ export default async function TodosPage({
       )}
     </section>
   );
-}
-
-/** Direct profile link if we have one, else a LinkedIn people-search prefilled with name + company + title. */
-function linkedinLink(
-  url: string | null,
-  name: string,
-  company: string | null,
-  title: string | null,
-): { url: string; direct: boolean } {
-  if (url && url.trim()) {
-    const u = url.trim();
-    return { url: u.startsWith("http") ? u : `https://${u}`, direct: true };
-  }
-  const q = encodeURIComponent([name, company, title].filter(Boolean).join(" "));
-  return { url: `https://www.linkedin.com/search/results/people/?keywords=${q}`, direct: false };
 }
 
 function ChannelChip({ channel }: { channel: TodoChannel }) {

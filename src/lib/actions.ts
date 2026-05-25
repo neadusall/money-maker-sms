@@ -48,6 +48,7 @@ import {
 } from "./position-email";
 import { sentimentOf } from "./sentiment";
 import { syncTodosForConversation } from "./todos";
+import { scoreCandidate } from "./qualify";
 
 function str(formData: FormData, key: string): string | null {
   const v = formData.get(key);
@@ -154,6 +155,7 @@ export async function createCampaign(formData: FormData) {
       recruiterName: str(formData, "recruiterName"),
       recruiterEmail: str(formData, "recruiterEmail"),
       fromNumber: str(formData, "fromNumber"),
+      salesNavUrl: str(formData, "salesNavUrl"),
       sendWindowStart: str(formData, "sendWindowStart") ?? "09:00",
       sendWindowEnd: str(formData, "sendWindowEnd") ?? "19:00",
     })
@@ -256,6 +258,7 @@ export async function updateCampaign(campaignId: string, formData: FormData) {
       recruiterName: str(formData, "recruiterName"),
       recruiterEmail: str(formData, "recruiterEmail"),
       fromNumber: str(formData, "fromNumber"),
+      salesNavUrl: str(formData, "salesNavUrl"),
       sendWindowStart: str(formData, "sendWindowStart") ?? undefined,
       sendWindowEnd: str(formData, "sendWindowEnd") ?? undefined,
       updatedAt: new Date(),
@@ -698,6 +701,21 @@ async function classifyInboundSilent(args: {
       contact: args.contact,
       conversationId: args.conversationId,
     }).catch((err) => console.error("[todos] sync failed:", err));
+
+    // Score their fit for the role (once) so it shows on To-dos + inbox.
+    if (args.contact.qualificationScore == null) {
+      const sc = await scoreCandidate({
+        campaign: args.campaign,
+        contact: args.contact,
+        recentHistory: ordered,
+      }).catch(() => null);
+      if (sc) {
+        await db
+          .update(contacts)
+          .set({ qualificationScore: sc.score, qualificationReason: sc.reason })
+          .where(eq(contacts.id, args.contact.id));
+      }
+    }
   }
 
   if (
