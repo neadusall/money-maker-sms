@@ -4,7 +4,10 @@
 FROM node:22-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+# Use `npm install` (not `npm ci`): the lock file was generated on Windows and
+# omits Linux-only optional binaries (@esbuild/linux-*, @rollup/*-linux-*),
+# which `npm ci` rejects. `npm install` resolves the correct platform binaries.
+RUN npm install --no-audit --no-fund
 
 # ---- builder: compile the Next.js standalone output ----
 FROM node:22-alpine AS builder
