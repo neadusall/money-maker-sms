@@ -184,18 +184,22 @@ export default async function Dashboard() {
               return (
                 <li
                   key={c.id}
-                  className="flex items-center gap-4 rounded-xl border border-zinc-200 bg-white px-4 py-3 shadow-sm transition hover:border-zinc-300 hover:shadow-md"
+                  className="group relative flex items-center gap-4 rounded-xl border border-zinc-200 bg-white px-4 py-3 shadow-sm transition hover:border-zinc-300 hover:shadow-md"
                 >
+                  {/* Whole-card click target → campaign (inbox/delete sit above it). */}
+                  <Link
+                    href={`/campaigns/${c.id}`}
+                    aria-label={`Open ${c.name}`}
+                    className="absolute inset-0 z-0 rounded-xl"
+                  />
                   {/* Name + quick links + status */}
-                  <div className="min-w-0 flex-1">
+                  <div className="pointer-events-none relative z-10 min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <Link href={`/campaigns/${c.id}`} className="truncate font-semibold text-zinc-900 hover:underline">
-                        {c.name}
-                      </Link>
+                      <span className="truncate font-semibold text-zinc-900 group-hover:underline">{c.name}</span>
                       <Link
                         href={`/campaigns/${c.id}/inbox`}
                         title="Open inbox"
-                        className="inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-[11px] font-medium text-zinc-600 hover:bg-zinc-50"
+                        className="pointer-events-auto inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-[11px] font-medium text-zinc-600 hover:bg-zinc-50"
                       >
                         <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                           <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 13.5h3.86a2.25 2.25 0 0 1 2.012 1.244l.256.512a2.25 2.25 0 0 0 2.013 1.244h3.218a2.25 2.25 0 0 0 2.013-1.244l.256-.512a2.25 2.25 0 0 1 2.013-1.244h3.859m-19.5.338V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18v-4.162c0-.224-.034-.447-.1-.661L19.24 5.338a2.25 2.25 0 0 0-2.15-1.588H6.911a2.25 2.25 0 0 0-2.15 1.588L2.35 13.177a2.25 2.25 0 0 0-.1.661Z" />
@@ -216,19 +220,21 @@ export default async function Dashboard() {
                     </div>
                   </div>
 
-                  {/* Inline metrics */}
-                  <div className="hidden items-center gap-5 sm:flex">
+                  {/* Inline metrics (click falls through to the card link) */}
+                  <div className="pointer-events-none relative z-10 hidden items-center gap-5 sm:flex">
                     <RowMetric label="Contacts" value={c.contactCount} />
                     <RowMetric label="Sent" value={c.sentCount} />
                     <RowMetric label="Reply" value={`${replyRate}%`} accent="violet" />
                     <RowMetric label="Positive" value={c.senti.positive} accent="emerald" />
                   </div>
 
-                  <div className="hidden w-24 shrink-0 lg:block">
+                  <div className="pointer-events-none relative z-10 hidden w-24 shrink-0 lg:block">
                     <SentimentStrip senti={c.senti} />
                   </div>
 
-                  <DeleteCampaignButton deleteAction={del} variant="icon" />
+                  <div className="relative z-10">
+                    <DeleteCampaignButton deleteAction={del} variant="icon" />
+                  </div>
                 </li>
               );
             })}

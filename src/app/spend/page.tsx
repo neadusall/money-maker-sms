@@ -28,10 +28,10 @@ async function many(q: Parameters<typeof db.execute>[0]): Promise<Record<string,
 
 export default async function SpendPage() {
   const llm = await one(sql`
-    SELECT coalesce(sum(cost_usd),0)::float total,
-           coalesce(sum(cost_usd) FILTER (WHERE created_at >= date_trunc('month', now())),0)::float month,
-           coalesce(sum(input_tokens + output_tokens),0)::bigint tokens,
-           count(*)::int calls
+    SELECT coalesce(sum(cost_usd),0)::float AS total,
+           coalesce(sum(cost_usd) FILTER (WHERE created_at >= date_trunc('month', now())),0)::float AS mtd,
+           coalesce(sum(input_tokens + output_tokens),0)::bigint AS tokens,
+           count(*)::int AS calls
     FROM usage_events`);
   const byPurpose = await many(sql`
     SELECT purpose, coalesce(sum(cost_usd),0)::float c, count(*)::int n
@@ -49,7 +49,7 @@ export default async function SpendPage() {
 
   const outb = Number(msg.outb ?? 0), inb = Number(msg.inb ?? 0), outbM = Number(msg.outb_m ?? 0), inbM = Number(msg.inb_m ?? 0);
   const enriched = Number(li.enriched ?? 0), enrichedM = Number(li.enriched_m ?? 0);
-  const llmTotal = Number(llm.total ?? 0), llmMonth = Number(llm.month ?? 0);
+  const llmTotal = Number(llm.total ?? 0), llmMonth = Number(llm.mtd ?? 0);
 
   const smsCost = outb * SMS_OUT + inb * SMS_IN;
   const smsCostM = outbM * SMS_OUT + inbM * SMS_IN;
