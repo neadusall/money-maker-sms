@@ -91,8 +91,9 @@ export default async function TodosPage({
     g.items.push(r);
     groups.set(r.contactId, g);
   }
-  // Un-reviewed candidates first, so the top of the list is what still needs eyes.
-  const grouped = [...groups.values()].sort((a, b) => Number(a.reviewed) - Number(b.reviewed));
+  // Stable order — everyone stays on the board. The read checkmark only marks
+  // which candidates Ryan has already looked at; it never removes or hides them.
+  const grouped = [...groups.values()];
 
   return (
     <section className="grid gap-6">
@@ -164,15 +165,16 @@ export default async function TodosPage({
             <li
               key={i}
               className={
-                "rounded-2xl border p-5 shadow-sm transition " +
-                (g.reviewed ? "border-emerald-200 bg-emerald-50/40 opacity-70" : "border-zinc-200 bg-white")
+                "rounded-2xl border bg-white p-5 shadow-sm transition " +
+                // Read = a green accent only; the card stays fully visible on the board.
+                (g.reviewed ? "border-emerald-300 ring-1 ring-emerald-100" : "border-zinc-200")
               }
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-start gap-2.5">
                   <form action={toggleCandidateReviewed.bind(null, g.contactId)} className="pt-0.5">
                     <button
-                      title={g.reviewed ? "Reviewed — click to mark unread" : "Mark as reviewed (I've read this)"}
+                      title={g.reviewed ? "Read — click to mark unread (stays on the board)" : "Mark as read — keeps them on the board"}
                       className={
                         "flex h-5 w-5 items-center justify-center rounded-md border transition " +
                         (g.reviewed
@@ -192,7 +194,7 @@ export default async function TodosPage({
                       <h3 className="font-semibold text-zinc-900">{g.name}</h3>
                       {g.reviewed ? (
                         <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
-                          Reviewed
+                          Read
                         </span>
                       ) : null}
                     </div>
