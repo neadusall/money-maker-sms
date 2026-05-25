@@ -170,6 +170,10 @@ export const contacts = pgTable(
     qualificationScore: integer("qualification_score"),
     qualificationReason: text("qualification_reason"),
 
+    // Cached LinkedIn profile (work history, education) from the enrichment API.
+    enrichedProfile: jsonb("enriched_profile").$type<Record<string, unknown>>(),
+    enrichedAt: timestamp("enriched_at", { withTimezone: true }),
+
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),

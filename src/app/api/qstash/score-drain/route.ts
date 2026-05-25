@@ -4,7 +4,8 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { campaigns, contacts } from "@/db/schema";
 import { verifyQStashSignature, enqueueScoreDrain } from "@/lib/schedule";
-import { scoreCandidate } from "@/lib/qualify";
+import { scoreContactDeep } from "@/lib/qualify";
+import { isEnrichmentConfigured } from "@/lib/enrich";
 
 export const maxDuration = 60;
 
@@ -28,43 +29,36 @@ export async function POST(request: Request) {
   const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId));
   if (!campaign) return NextResponse.json({ ok: true, note: "campaign gone" });
 
-  // Unscored contacts in this campaign (skip opted-out).
-  const batch = await db
-    .select()
-    .from(contacts)
-    .where(
-      and(
-        eq(contacts.campaignId, campaignId),
-        isNull(contacts.qualificationScore),
-        eq(contacts.optedOut, false),
-      ),
-    )
-    .limit(SCORE_BATCH);
+  // When enrichment is configured, process everyone not yet enriched (pull real
+  // work history + score on it). Otherwise just score the unscored.
+  const enrichOn = isEnrichmentConfigured();
+  const needsWork = enrichOn ? isNull(contacts.enrichedAt) : isNull(contacts.qualificationScore);
+  const selector = and(eq(contacts.campaignId, campaignId), eq(contacts.optedOut, false), needsWork);
+
+  const batch = await db.select().from(contacts).where(selector).limit(SCORE_BATCH);
 
   let scored = 0;
   for (const contact of batch) {
-    const sc = await scoreCandidate({ campaign, contact, model: BULK_MODEL }).catch(() => null);
-    // Store the score; on failure mark 0 so we don't loop forever on the same row.
+    const { score, enriched, fetched } = await scoreContactDeep({ campaign, contact, model: BULK_MODEL }).catch(
+      () => ({ score: null, enriched: null, fetched: false }),
+    );
     await db
       .update(contacts)
       .set({
-        qualificationScore: sc ? sc.score : 0,
-        qualificationReason: sc ? sc.reason : "could not score",
+        qualificationScore: score ? score.score : 0,
+        qualificationReason: score ? score.reason : "could not score",
+        // Mark processed so we don't reprocess; cache the fetched profile.
+        enrichedAt: new Date(),
+        ...(fetched ? { enrichedProfile: (enriched as unknown as Record<string, unknown>) ?? null } : {}),
       })
       .where(eq(contacts.id, contact.id));
-    if (sc) scored++;
+    if (score) scored++;
   }
 
   const [{ remaining }] = await db
     .select({ remaining: sql<number>`count(*)::int` })
     .from(contacts)
-    .where(
-      and(
-        eq(contacts.campaignId, campaignId),
-        isNull(contacts.qualificationScore),
-        eq(contacts.optedOut, false),
-      ),
-    );
+    .where(selector);
 
   if (remaining > 0) await enqueueScoreDrain(campaignId, 2);
 

@@ -2,6 +2,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { anthropic, CLAUDE_MODEL } from "./anthropic";
 import type { Campaign, Contact } from "@/db/schema";
+import { enrichLinkedIn, enrichmentToText, isEnrichmentConfigured, type EnrichedProfile } from "./enrich";
 
 const ScoreSchema = z.object({
   score: z.number().int().min(1).max(100),
@@ -27,6 +28,7 @@ export async function scoreCandidate(args: {
   contact: Contact;
   recentHistory?: { direction: "outbound" | "inbound"; body: string }[];
   model?: string;
+  enrichmentText?: string;
 }): Promise<QualScore | null> {
   if (!process.env.ANTHROPIC_API_KEY) return null;
   if (!args.campaign.positionSummary?.trim()) return null;
@@ -37,7 +39,9 @@ export async function scoreCandidate(args: {
     c.jobTitle ? `Current title: ${c.jobTitle}` : null,
     c.company ? `Current company: ${c.company}` : null,
     c.location ? `Location: ${c.location}` : null,
-    c.linkedinUrl ? `LinkedIn: ${c.linkedinUrl}` : null,
+    // Full LinkedIn work history (when enriched) — the most authoritative signal.
+    args.enrichmentText ? `\nLinkedIn profile:\n${args.enrichmentText}` : null,
+    !args.enrichmentText && c.linkedinUrl ? `LinkedIn: ${c.linkedinUrl}` : null,
   ]
     .filter(Boolean)
     .join("\n");
@@ -80,4 +84,26 @@ export async function scoreCandidate(args: {
   } catch {
     return null;
   }
+}
+
+/**
+ * Score a contact using their real LinkedIn work history when possible: reuse a
+ * cached enriched profile, else fetch one via the enrichment API. Pure (no DB
+ * writes) — the caller persists `score` and `enriched`.
+ */
+export async function scoreContactDeep(args: {
+  campaign: Campaign;
+  contact: Contact;
+  recentHistory?: { direction: "outbound" | "inbound"; body: string }[];
+  model?: string;
+}): Promise<{ score: QualScore | null; enriched: EnrichedProfile | null; fetched: boolean }> {
+  let enriched = (args.contact.enrichedProfile as EnrichedProfile | null) ?? null;
+  let fetched = false;
+  if (!enriched && isEnrichmentConfigured() && args.contact.linkedinUrl) {
+    enriched = await enrichLinkedIn(args.contact.linkedinUrl);
+    fetched = true;
+  }
+  const enrichmentText = enriched ? enrichmentToText(enriched) : undefined;
+  const score = await scoreCandidate({ ...args, enrichmentText });
+  return { score, enriched, fetched };
 }

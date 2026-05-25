@@ -49,7 +49,7 @@ import {
 } from "./position-email";
 import { sentimentOf } from "./sentiment";
 import { syncTodosForConversation } from "./todos";
-import { scoreCandidate } from "./qualify";
+import { scoreContactDeep } from "./qualify";
 
 function str(formData: FormData, key: string): string | null {
   const v = formData.get(key);
@@ -715,17 +715,24 @@ async function classifyInboundSilent(args: {
       conversationId: args.conversationId,
     }).catch((err) => console.error("[todos] sync failed:", err));
 
-    // Score their fit for the role (once) so it shows on To-dos + inbox.
+    // Score their fit for the role (once) so it shows on To-dos + inbox —
+    // using real LinkedIn work history when enrichment is configured.
     if (args.contact.qualificationScore == null) {
-      const sc = await scoreCandidate({
+      const { score, enriched, fetched } = await scoreContactDeep({
         campaign: args.campaign,
         contact: args.contact,
         recentHistory: ordered,
-      }).catch(() => null);
-      if (sc) {
+      }).catch(() => ({ score: null, enriched: null, fetched: false }));
+      if (score) {
         await db
           .update(contacts)
-          .set({ qualificationScore: sc.score, qualificationReason: sc.reason })
+          .set({
+            qualificationScore: score.score,
+            qualificationReason: score.reason,
+            ...(fetched
+              ? { enrichedProfile: (enriched as unknown as Record<string, unknown>) ?? null, enrichedAt: new Date() }
+              : {}),
+          })
           .where(eq(contacts.id, args.contact.id));
       }
     }
