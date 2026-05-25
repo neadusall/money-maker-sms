@@ -1,0 +1,88 @@
+import { notFound } from "next/navigation";
+import { and, desc, eq, sql } from "drizzle-orm";
+import { db } from "@/db/client";
+import { campaigns, contacts, conversations, messages } from "@/db/schema";
+import { ConversationList, type ConversationListItem } from "@/components/ConversationList";
+
+export const dynamic = "force-dynamic";
+
+export default async function InboxLayout({
+  params,
+  children,
+}: {
+  params: Promise<{ id: string }>;
+  children: React.ReactNode;
+}) {
+  const { id } = await params;
+  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, id));
+  if (!campaign) notFound();
+
+  const lastMessagesSubquery = db
+    .select({
+      conversationId: messages.conversationId,
+      body: messages.body,
+      direction: messages.direction,
+      createdAt: messages.createdAt,
+      rn: sql<number>`row_number() over (partition by ${messages.conversationId} order by ${messages.createdAt} desc)`.as("rn"),
+    })
+    .from(messages)
+    .as("lm");
+
+  const rows = await db
+    .select({
+      id: conversations.id,
+      status: conversations.status,
+      classification: conversations.classification,
+      lastMessageAt: conversations.lastMessageAt,
+      unreadCount: conversations.unreadCount,
+      contact: contacts,
+      lastMessageBody: lastMessagesSubquery.body,
+      lastMessageDirection: lastMessagesSubquery.direction,
+    })
+    .from(conversations)
+    .innerJoin(contacts, eq(contacts.id, conversations.contactId))
+    .leftJoin(
+      lastMessagesSubquery,
+      sql`${lastMessagesSubquery.conversationId} = ${conversations.id} and ${lastMessagesSubquery.rn} = 1`,
+    )
+    .where(
+      and(
+        eq(conversations.campaignId, id),
+        // The inbox is for correspondence — only show threads where the
+        // candidate actually replied at least once.
+        sql`exists (select 1 from messages m where m.conversation_id = ${conversations.id} and m.direction = 'inbound')`,
+      ),
+    )
+    .orderBy(desc(conversations.lastMessageAt))
+    .limit(500);
+
+  const list: ConversationListItem[] = rows.map((r) => ({
+    id: r.id,
+    status: r.status,
+    classification: r.classification,
+    lastMessageAt: r.lastMessageAt.toISOString(),
+    unreadCount: Number(r.unreadCount),
+    contact: {
+      id: r.contact.id,
+      firstName: r.contact.firstName,
+      lastName: r.contact.lastName,
+      phone: r.contact.phone,
+      company: r.contact.company,
+      jobTitle: r.contact.jobTitle,
+    },
+    lastMessage: r.lastMessageBody
+      ? { direction: r.lastMessageDirection ?? "outbound", body: r.lastMessageBody }
+      : null,
+  }));
+
+  return (
+    <div className="-mx-6 -my-8 flex h-[calc(100vh-57px)] overflow-hidden">
+      <ConversationList
+        campaignId={id}
+        campaignName={campaign.name}
+        conversations={list}
+      />
+      <section className="flex min-w-0 flex-1 flex-col">{children}</section>
+    </div>
+  );
+}

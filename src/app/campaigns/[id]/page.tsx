@@ -1,0 +1,300 @@
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { and, count, eq, sql } from "drizzle-orm";
+import { db } from "@/db/client";
+import { campaigns, contacts, conversations } from "@/db/schema";
+import {
+  deleteCampaign,
+  startCampaignSend,
+  setCampaignStatus,
+  updateCampaign,
+} from "@/lib/actions";
+import { CampaignForm } from "@/components/CampaignForm";
+import { DeleteCampaignButton } from "@/components/DeleteCampaignButton";
+import { isWithinSendWindow } from "@/lib/send-window";
+import { AutoRefresh } from "@/components/AutoRefresh";
+import { LiveBadge } from "@/components/LiveBadge";
+import { KpiCard, Funnel, SentimentMeter, MiniStat, pct } from "@/components/Stats";
+import { sentimentOf } from "@/lib/sentiment";
+
+export const dynamic = "force-dynamic";
+
+export default async function CampaignDetail({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+
+  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, id));
+  if (!campaign) notFound();
+
+  const [stats] = await db
+    .select({
+      total: sql<number>`count(*)::int`,
+      pending: sql<number>`count(*) filter (where ${contacts.status} = 'pending')::int`,
+      validating: sql<number>`count(*) filter (where ${contacts.status} = 'validating')::int`,
+      sent: sql<number>`count(*) filter (where ${contacts.status} in ('sent','delivered','replied'))::int`,
+      delivered: sql<number>`count(*) filter (where ${contacts.status} in ('delivered','replied'))::int`,
+      replied: sql<number>`count(*) filter (where ${contacts.status} = 'replied')::int`,
+      optedOut: sql<number>`count(*) filter (where ${contacts.status} = 'opted_out')::int`,
+      failed: sql<number>`count(*) filter (where ${contacts.status} = 'failed')::int`,
+      emailsSent: sql<number>`count(*) filter (where ${contacts.positionEmailSentAt} is not null)::int`,
+    })
+    .from(contacts)
+    .where(eq(contacts.campaignId, id));
+
+  const [convoStats] = await db
+    .select({ needsAttention: count() })
+    .from(conversations)
+    .where(and(eq(conversations.campaignId, id), eq(conversations.status, "needs_attention")));
+
+  // Reply-sentiment breakdown from the AI classifications on replied threads.
+  const classRows = await db
+    .select({
+      classification: conversations.classification,
+      n: sql<number>`count(*)::int`,
+    })
+    .from(conversations)
+    .where(and(eq(conversations.campaignId, id), sql`${conversations.classification} is not null`))
+    .groupBy(conversations.classification);
+
+  let positive = 0;
+  let neutral = 0;
+  let negative = 0;
+  for (const r of classRows) {
+    const bucket = sentimentOf(r.classification);
+    if (bucket === "positive") positive += r.n;
+    else if (bucket === "negative") negative += r.n;
+    else neutral += r.n;
+  }
+
+  const send = startCampaignSend.bind(null, id);
+  const update = updateCampaign.bind(null, id);
+  const pause = setCampaignStatus.bind(null, id, "paused");
+  const resume = setCampaignStatus.bind(null, id, "active");
+  const del = deleteCampaign.bind(null, id);
+
+  const pending = stats?.pending ?? 0;
+  const total = stats?.total ?? 0;
+  const sent = stats?.sent ?? 0;
+  const delivered = stats?.delivered ?? 0;
+  const replied = stats?.replied ?? 0;
+  const classified = positive + neutral + negative;
+  const deliveryRate = pct(delivered, sent);
+  const replyRate = pct(replied, delivered);
+  const positiveRate = pct(positive, classified);
+  const sendWindow = isWithinSendWindow(campaign.sendWindowStart, campaign.sendWindowEnd);
+
+  return (
+    <section className="grid gap-6">
+      <AutoRefresh intervalMs={8000} />
+      <div>
+        <Link href="/" className="text-xs text-zinc-500 hover:text-zinc-700">
+          ← All campaigns
+        </Link>
+        <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-semibold tracking-tight">{campaign.name}</h1>
+            <StatusBadge status={campaign.status} />
+            <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600">
+              {campaign.llmMode.replace(/_/g, " ")}
+            </span>
+          </div>
+          <LiveBadge />
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Link
+          href={`/campaigns/${id}/contacts`}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-zinc-50"
+        >
+          <svg className="h-4 w-4 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />
+          </svg>
+          Contacts ({stats?.total ?? 0})
+        </Link>
+        <Link
+          href={`/campaigns/${id}/inbox`}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-zinc-50"
+        >
+          <svg className="h-4 w-4 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.76c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 0 1 .778-.332 48.294 48.294 0 0 0 5.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0 0 12 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018Z" />
+          </svg>
+          Inbox
+          {convoStats.needsAttention > 0 ? (
+            <span className="ml-0.5 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-rose-500 px-1.5 text-[10px] font-semibold text-white">
+              {convoStats.needsAttention}
+            </span>
+          ) : null}
+        </Link>
+
+        {campaign.status === "active" ? (
+          <form action={pause}>
+            <button className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm font-medium text-amber-700 hover:bg-amber-100">
+              Pause
+            </button>
+          </form>
+        ) : (
+          <form action={resume}>
+            <button className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-100">
+              {campaign.status === "draft" ? "Activate" : "Resume"}
+            </button>
+          </form>
+        )}
+
+        <form action={send}>
+          <button
+            disabled={pending === 0}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-sky-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-zinc-300"
+            title={
+              pending === 0
+                ? "Everyone in this campaign has already been messaged"
+                : `Texts the ${pending} contacts not yet messaged. Anyone already texted in this campaign is never contacted again.`
+            }
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 12 3.269 3.125A59.769 59.769 0 0 1 21.485 12 59.768 59.768 0 0 1 3.27 20.875L5.999 12Zm0 0h7.5" />
+            </svg>
+            {pending > 0 ? `Send to ${pending} unsent` : "Send to unsent"}
+          </button>
+        </form>
+
+        <div className="ml-auto">
+          <DeleteCampaignButton deleteAction={del} />
+        </div>
+      </div>
+
+      {pending > 0 && (stats?.sent ?? 0) > 0 ? (
+        <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
+          <strong>You&apos;re adding to a campaign that already ran.</strong> &quot;Send to {pending} unsent&quot; texts
+          only the {pending} newly-added contact{pending === 1 ? "" : "s"} — the {stats?.sent} you&apos;ve already
+          messaged are skipped, so nobody is texted twice.
+        </div>
+      ) : null}
+
+      {!sendWindow.ok && pending > 0 ? (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          <strong>Outside the send window.</strong> Sends are paused until{" "}
+          {sendWindow.openAt.toLocaleString(undefined, {
+            weekday: "short",
+            hour: "numeric",
+            minute: "2-digit",
+          })}{" "}
+          ({campaign.sendWindowStart}–{campaign.sendWindowEnd}, {process.env.APP_TIMEZONE ?? "America/New_York"}).
+          &quot;Send batch&quot; won&apos;t send right now. Widen the window below (use{" "}
+          <code>00:00</code>–<code>24:00</code> for all day) and save to send immediately.
+        </div>
+      ) : null}
+
+      {pending === 0 && (stats?.total ?? 0) === 0 ? (
+        <div className="rounded-xl border border-dashed border-sky-300 bg-sky-50 p-4 text-sm text-sky-900">
+          This campaign has no contacts yet.{" "}
+          <Link href={`/campaigns/${id}/contacts`} className="font-semibold underline">
+            Upload a CSV
+          </Link>{" "}
+          to start sending.
+        </div>
+      ) : null}
+
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <KpiCard label="Contacts" value={total} accent="zinc" hint="in this campaign" icon={<IconUsers />} />
+        <KpiCard
+          label="Delivery rate"
+          value={`${deliveryRate}%`}
+          accent="sky"
+          chip={`${delivered} delivered`}
+          hint={`of ${sent} sent`}
+          icon={<IconCheck />}
+        />
+        <KpiCard
+          label="Reply rate"
+          value={`${replyRate}%`}
+          accent="violet"
+          chip={`${replied} ${replied === 1 ? "reply" : "replies"}`}
+          hint="of delivered (SMS engagement)"
+          icon={<IconChat />}
+        />
+        <KpiCard
+          label="Positive replies"
+          value={positive}
+          accent="emerald"
+          chip={classified ? `${positiveRate}% of replies` : "—"}
+          hint="interested leads"
+          icon={<IconSpark />}
+        />
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <Funnel
+          stages={[
+            { label: "Contacts", value: total, accent: "zinc" },
+            { label: "Sent", value: sent, accent: "sky", rateOf: total },
+            { label: "Delivered", value: delivered, accent: "violet", rateOf: sent },
+            { label: "Replied", value: replied, accent: "emerald", rateOf: delivered },
+            { label: "Positive", value: positive, accent: "emerald", rateOf: classified || replied },
+          ]}
+        />
+        <SentimentMeter positive={positive} neutral={neutral} negative={negative} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <MiniStat label="Pending" value={pending} />
+        <MiniStat label="Validating" value={stats?.validating ?? 0} accent={(stats?.validating ?? 0) > 0 ? "sky" : "zinc"} />
+        <MiniStat label="Failed" value={stats?.failed ?? 0} accent={(stats?.failed ?? 0) > 0 ? "rose" : "zinc"} />
+        <MiniStat label="Opted out" value={stats?.optedOut ?? 0} />
+        <MiniStat label="Emails sent" value={stats?.emailsSent ?? 0} accent={(stats?.emailsSent ?? 0) > 0 ? "amber" : "zinc"} />
+        <MiniStat label="Needs you" value={convoStats.needsAttention} accent={convoStats.needsAttention > 0 ? "amber" : "zinc"} />
+      </div>
+
+      <div>
+        <h2 className="mb-3 text-sm font-semibold text-zinc-500">Campaign settings</h2>
+        <CampaignForm action={update} campaign={campaign} submitLabel="Save changes" />
+      </div>
+    </section>
+  );
+}
+
+function IconUsers() {
+  return (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />
+    </svg>
+  );
+}
+function IconCheck() {
+  return (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+      <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+    </svg>
+  );
+}
+function IconChat() {
+  return (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.076-4.076a1.526 1.526 0 0 1 1.037-.443 48.282 48.282 0 0 0 5.68-.494c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0 0 12 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018Z" />
+    </svg>
+  );
+}
+function IconSpark() {
+  return (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z" />
+    </svg>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const styles: Record<string, string> = {
+    active: "bg-emerald-100 text-emerald-700",
+    paused: "bg-amber-100 text-amber-700",
+    completed: "bg-zinc-200 text-zinc-600",
+    draft: "bg-sky-100 text-sky-700",
+  };
+  return (
+    <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${styles[status] ?? "bg-zinc-100 text-zinc-600"}`}>
+      {status}
+    </span>
+  );
+}
