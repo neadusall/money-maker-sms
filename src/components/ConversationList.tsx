@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Avatar } from "./Avatar";
 import { DeleteConversationButton } from "./DeleteConversationButton";
 import { formatPhone } from "@/lib/phone";
@@ -54,8 +54,43 @@ export function ConversationList({
   const searchParams = useSearchParams();
   const filter = searchParams.get("filter") ?? "all";
   const [query, setQuery] = useState("");
+  // Server-side search across ALL message bodies (not just the last one).
+  const [results, setResults] = useState<ConversationListItem[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const isSearch = query.trim().length >= 2;
+
+  useEffect(() => {
+    const term = query.trim();
+    if (term.length < 2) {
+      setResults(null);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    const ctrl = new AbortController();
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/campaigns/${campaignId}/search?q=${encodeURIComponent(term)}`, {
+          signal: ctrl.signal,
+        });
+        const json = (await res.json()) as { results?: ConversationListItem[] };
+        setResults(json.results ?? []);
+      } catch {
+        /* aborted or transient error */
+      } finally {
+        setSearching(false);
+      }
+    }, 300);
+    return () => {
+      clearTimeout(t);
+      ctrl.abort();
+    };
+  }, [query, campaignId]);
 
   const filtered = useMemo(() => {
+    // When searching, show ALL keyword matches across the whole thread history,
+    // regardless of the status filter.
+    if (isSearch) return results ?? [];
     let xs = conversations;
     if (filter === "active") {
       // "Active" = everyone who corresponded in a non-negative way, including
@@ -64,23 +99,8 @@ export function ConversationList({
     } else if (filter !== "all") {
       xs = xs.filter((c) => c.status === filter);
     }
-    if (query.trim()) {
-      const q = query.trim().toLowerCase();
-      xs = xs.filter((c) => {
-        const name = [c.contact.firstName, c.contact.lastName].filter(Boolean).join(" ").toLowerCase();
-        const company = (c.contact.company ?? "").toLowerCase();
-        const body = (c.lastMessage?.body ?? "").toLowerCase();
-        const phone = c.contact.phone.toLowerCase();
-        return (
-          name.includes(q) ||
-          company.includes(q) ||
-          phone.includes(q) ||
-          body.includes(q)
-        );
-      });
-    }
     return xs;
-  }, [conversations, filter, query]);
+  }, [conversations, filter, query, isSearch, results]);
 
   const openCount = conversations.filter((c) => c.status !== "closed").length;
 
@@ -134,12 +154,22 @@ export function ConversationList({
         </div>
       </div>
 
+      {isSearch ? (
+        <div className="border-b border-zinc-100 px-4 py-1.5 text-xs text-zinc-500">
+          {searching ? "Searching all messages…" : `${filtered.length} match${filtered.length === 1 ? "" : "es"} for “${query.trim()}”`}
+        </div>
+      ) : null}
+
       <div className="flex-1 overflow-y-auto">
         {filtered.length === 0 ? (
           <div className="px-4 py-12 text-center text-sm text-zinc-500">
-            {conversations.length === 0
-              ? "No conversations yet."
-              : "No conversations match this filter."}
+            {isSearch
+              ? searching
+                ? "Searching…"
+                : `No messages match “${query.trim()}”.`
+              : conversations.length === 0
+                ? "No conversations yet."
+                : "No conversations match this filter."}
           </div>
         ) : (
           <ul className="divide-y divide-zinc-100">

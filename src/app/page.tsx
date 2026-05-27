@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { desc, sql } from "drizzle-orm";
 import { db } from "@/db/client";
-import { campaigns, contacts, conversations, messages } from "@/db/schema";
+import { campaigns, contacts, conversations } from "@/db/schema";
 import { deleteCampaign } from "@/lib/actions";
 import { DeleteCampaignButton } from "@/components/DeleteCampaignButton";
 import { AutoRefresh } from "@/components/AutoRefresh";
@@ -39,16 +39,19 @@ export default async function Dashboard() {
     .from(contacts)
     .groupBy(contacts.campaignId);
 
-  const convoAgg = await db
-    .select({
-      campaignId: conversations.campaignId,
-      needsAttention: sql<number>`count(*) filter (where ${conversations.status} = 'needs_attention')::int`,
-      // True reply count: conversations that actually received an inbound message.
-      // (Don't rely on contacts.status='replied' — delivery receipts can churn it.)
-      replied: sql<number>`count(*) filter (where exists (select 1 from messages m where m.conversation_id = ${conversations.id} and m.direction = 'inbound'))::int`,
-    })
-    .from(conversations)
-    .groupBy(conversations.campaignId);
+  // Raw SQL with an alias — Drizzle won't correlate ${conversations.id} inside a
+  // filtered EXISTS subquery (silently returns 0). Reply = conversations that
+  // actually received an inbound (robust vs. contacts.status churn).
+  const convoAggRows = await db.execute(sql`
+    SELECT cv.campaign_id cid,
+      count(*) filter (where cv.status = 'needs_attention')::int needs_attention,
+      count(*) filter (where exists (select 1 from messages m where m.conversation_id = cv.id and m.direction = 'inbound'))::int replied
+    FROM conversations cv GROUP BY cv.campaign_id`);
+  const convoAgg = (convoAggRows.rows as { cid: string; needs_attention: number; replied: number }[]).map((r) => ({
+    campaignId: r.cid,
+    needsAttention: Number(r.needs_attention),
+    replied: Number(r.replied),
+  }));
 
   const classAgg = await db
     .select({

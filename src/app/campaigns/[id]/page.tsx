@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
-import { campaigns, contacts, conversations, messages } from "@/db/schema";
+import { campaigns, contacts, conversations } from "@/db/schema";
 import {
   deleteCampaign,
   startCampaignSend,
@@ -48,15 +48,15 @@ export default async function CampaignDetail({
     .from(contacts)
     .where(eq(contacts.campaignId, id));
 
-  const [convoStats] = await db
-    .select({
-      needsAttention: sql<number>`count(*) filter (where ${conversations.status} = 'needs_attention')::int`,
-      // True reply count: conversations that received an inbound (robust against
-      // delivery-receipt status churn).
-      replied: sql<number>`count(*) filter (where exists (select 1 from messages m where m.conversation_id = ${conversations.id} and m.direction = 'inbound'))::int`,
-    })
-    .from(conversations)
-    .where(eq(conversations.campaignId, id));
+  // Raw SQL with a table alias — Drizzle won't correlate ${conversations.id}
+  // inside a filtered EXISTS subquery (it silently returns 0).
+  const convoRows = await db.execute(sql`
+    SELECT
+      count(*) filter (where cv.status = 'needs_attention')::int needs_attention,
+      count(*) filter (where exists (select 1 from messages m where m.conversation_id = cv.id and m.direction = 'inbound'))::int replied
+    FROM conversations cv WHERE cv.campaign_id = ${id}`);
+  const convoRow = (convoRows.rows[0] ?? {}) as { needs_attention?: number; replied?: number };
+  const convoStats = { needsAttention: Number(convoRow.needs_attention ?? 0), replied: Number(convoRow.replied ?? 0) };
 
   // Reply-sentiment breakdown from the AI classifications on replied threads.
   const classRows = await db
