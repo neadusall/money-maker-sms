@@ -6,11 +6,16 @@ import { campaigns, contacts } from "@/db/schema";
 import { verifyQStashSignature, enqueueScoreDrain } from "@/lib/schedule";
 import { scoreContactDeep } from "@/lib/qualify";
 import { ensureRubric } from "@/lib/rubric";
-import { isEnrichmentConfigured } from "@/lib/enrich";
 
 export const maxDuration = 60;
 
-const SCORE_BATCH = 12;
+// Keep concurrency low: too many simultaneous LLM calls trip Anthropic rate
+// limits, and a rate-limited call used to get permanently stamped as a failure.
+const SCORE_BATCH = 5;
+// After this many consecutive zero-progress passes, stop re-enqueuing (the API
+// is almost certainly down/throttled) instead of looping forever. Unscored
+// contacts stay null so they show as "—" and can be re-scored later.
+const MAX_STALLS = 8;
 // Cheaper/faster model for bulk list scoring.
 const BULK_MODEL = "claude-sonnet-4-6";
 
@@ -20,8 +25,11 @@ export async function POST(request: Request) {
   if (!ok) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
   let campaignId: string | undefined;
+  let stall = 0;
   try {
-    campaignId = JSON.parse(rawBody).campaignId;
+    const body = JSON.parse(rawBody);
+    campaignId = body.campaignId;
+    stall = Number(body.stall) || 0;
   } catch {
     return NextResponse.json({ error: "invalid body" }, { status: 400 });
   }
@@ -30,20 +38,22 @@ export async function POST(request: Request) {
   const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId));
   if (!campaign) return NextResponse.json({ ok: true, note: "campaign gone" });
 
-  // When enrichment is configured, process everyone not yet enriched (pull real
-  // work history + score on it). Otherwise just score the unscored.
-  const enrichOn = isEnrichmentConfigured();
-  const needsWork = enrichOn ? isNull(contacts.enrichedAt) : isNull(contacts.qualificationScore);
-  const selector = and(eq(contacts.campaignId, campaignId), eq(contacts.optedOut, false), needsWork);
+  // Drive off the SCORE, not enrichment: anything without a fit score still needs
+  // work. A failed scoring attempt leaves the score null (below), so it's retried
+  // on a later pass instead of being permanently marked done.
+  const selector = and(
+    eq(contacts.campaignId, campaignId),
+    eq(contacts.optedOut, false),
+    isNull(contacts.qualificationScore),
+  );
 
   const batch = await db.select().from(contacts).where(selector).limit(SCORE_BATCH);
 
   // Compact rubric (generated once per campaign) keeps each scoring prompt small.
   const rubric = (await ensureRubric(campaign).catch(() => null)) ?? undefined;
 
-  // Process the batch concurrently so each drain pass returns fast (enrichment
-  // adds a ~3s API call per contact; sequential would risk the callback timeout).
   let scored = 0;
+  let failed = 0;
   await Promise.all(
     batch.map(async (contact) => {
       const { score, enriched, fetched, locationRegion, locationMatch } = await scoreContactDeep({
@@ -52,19 +62,32 @@ export async function POST(request: Request) {
         model: BULK_MODEL,
         rubric,
       }).catch(() => ({ score: null, enriched: null, fetched: false, locationRegion: null, locationMatch: null }));
-      await db
-        .update(contacts)
-        .set({
-          qualificationScore: score ? score.score : 0,
-          qualificationReason: score ? score.reason : "could not score",
-          locationRegion,
-          locationMatch,
-          // Mark processed so we don't reprocess; cache the fetched profile.
-          enrichedAt: new Date(),
-          ...(fetched ? { enrichedProfile: (enriched as unknown as Record<string, unknown>) ?? null } : {}),
-        })
-        .where(eq(contacts.id, contact.id));
-      if (score) scored++;
+
+      if (score) {
+        await db
+          .update(contacts)
+          .set({
+            qualificationScore: score.score,
+            qualificationReason: score.reason,
+            locationRegion,
+            locationMatch,
+            enrichedAt: new Date(),
+            ...(fetched ? { enrichedProfile: (enriched as unknown as Record<string, unknown>) ?? null } : {}),
+          })
+          .where(eq(contacts.id, contact.id));
+        scored++;
+      } else {
+        // Scoring failed (rate limit / transient). Leave qualificationScore NULL
+        // so this contact is retried, but cache any profile we fetched so we
+        // don't re-pay the enrichment API on the retry.
+        failed++;
+        if (fetched) {
+          await db
+            .update(contacts)
+            .set({ enrichedAt: new Date(), enrichedProfile: (enriched as unknown as Record<string, unknown>) ?? null })
+            .where(eq(contacts.id, contact.id));
+        }
+      }
     }),
   );
 
@@ -73,9 +96,18 @@ export async function POST(request: Request) {
     .from(contacts)
     .where(selector);
 
-  if (remaining > 0) await enqueueScoreDrain(campaignId, 2);
+  if (remaining > 0) {
+    // No progress this pass → likely rate-limited; back off and count the stall.
+    const nextStall = scored > 0 ? 0 : stall + 1;
+    if (nextStall >= MAX_STALLS) {
+      console.warn(`[score-drain ${campaignId}] giving up after ${nextStall} stalled passes; ${remaining} left unscored`);
+    } else {
+      const delay = nextStall > 0 ? Math.min(60, 8 * nextStall) : 2;
+      await enqueueScoreDrain(campaignId, delay, nextStall);
+    }
+  }
 
-  console.log(`[score-drain ${campaignId}] scored=${scored} remaining=${remaining}`);
+  console.log(`[score-drain ${campaignId}] scored=${scored} failed=${failed} remaining=${remaining} stall=${stall}`);
   revalidatePath(`/campaigns/${campaignId}/contacts`);
-  return NextResponse.json({ ok: true, scored, remaining });
+  return NextResponse.json({ ok: true, scored, failed, remaining });
 }

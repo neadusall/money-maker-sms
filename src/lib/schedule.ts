@@ -43,11 +43,13 @@ export async function enqueueValidationDrain(campaignId: string, delaySeconds: n
   });
 }
 
-/** Enqueue (or re-enqueue) a fit-scoring drain pass via QStash. */
-export async function enqueueScoreDrain(campaignId: string, delaySeconds: number): Promise<void> {
+/** Enqueue (or re-enqueue) a fit-scoring drain pass via QStash. `stall` tracks
+ *  consecutive no-progress passes so the drain can back off and eventually give
+ *  up instead of looping forever when the LLM API is unavailable. */
+export async function enqueueScoreDrain(campaignId: string, delaySeconds: number, stall = 0): Promise<void> {
   await qstashClient().publishJSON({
     url: `${publicBaseUrl()}/api/qstash/score-drain`,
-    body: { campaignId },
+    body: { campaignId, stall },
     delay: delaySeconds,
   });
 }
