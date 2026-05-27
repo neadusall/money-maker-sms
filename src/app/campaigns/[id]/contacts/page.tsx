@@ -90,7 +90,7 @@ export default async function ContactsPage({
   const validateNow = validateExistingContacts.bind(null, id);
   const scoreFit = scoreCampaignContacts.bind(null, id);
   const setBar = setMinScore.bind(null, id);
-  const SCORE_TIERS = [0, 25, 50, 75, 80, 90, 100];
+  const SCORE_TIERS = [0, 25, 50, 65, 75, 80, 90, 100];
 
   return (
     <section className="grid gap-6">
