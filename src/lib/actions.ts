@@ -53,6 +53,7 @@ import { sentimentOf } from "./sentiment";
 import { syncTodosForConversation } from "./todos";
 import { scoreContactDeep } from "./qualify";
 import { ensureRubric } from "./rubric";
+import { isCalendarConfigured, mightProposeTime, extractMeeting, sendCalendarInvite } from "./calendar";
 
 function str(formData: FormData, key: string): string | null {
   const v = formData.get(key);
@@ -753,6 +754,12 @@ export async function recordInbound(args: {
     console.error("[recordInbound] position email failed:", err);
   });
 
+  // If the candidate proposed a concrete time ("call me at 4 EST"), drop a
+  // calendar invite on your calendar with their number to call. Best-effort.
+  await maybeAddToCalendar({ campaign, contact, inboundBody: args.body }).catch((err) => {
+    console.error("[recordInbound] calendar invite failed:", err);
+  });
+
   // Await classification: on serverless (Vercel), fire-and-forget async work is
   // killed the moment the response is sent, so we must finish it inline.
   await classifyInboundSilent({
@@ -769,6 +776,47 @@ export async function recordInbound(args: {
   revalidatePath("/");
   revalidatePath(`/campaigns/${campaign.id}/inbox`);
   return { matched: true, conversationId: convo.id };
+}
+
+/**
+ * If a candidate's reply proposes a concrete time, put it on the recruiter's
+ * calendar: email an .ics invite (which Gmail auto-adds) to the recruiter's
+ * inbox — attendee = recruiter (not the candidate), with the candidate's listed
+ * number to call in the details. Best-effort; silent no-op if nothing to add.
+ */
+async function maybeAddToCalendar(args: {
+  campaign: Campaign;
+  contact: Contact;
+  inboundBody: string;
+}): Promise<void> {
+  const { campaign, contact, inboundBody } = args;
+  if (!isCalendarConfigured()) return;
+  if (contact.optedOut) return;
+  if (!mightProposeTime(inboundBody)) return;
+
+  const tz = process.env.APP_TIMEZONE ?? "America/New_York";
+  const meeting = await extractMeeting(inboundBody, { nowISO: new Date().toISOString(), tz });
+  if (!meeting) return;
+
+  // Use the recruiter's email (per Ryan: their calendar, not the candidate's).
+  const to = campaign.recruiterEmail || process.env.CALENDAR_INVITE_TO || process.env.SMTP_USER;
+  if (!to) return;
+
+  const name = [contact.firstName, contact.lastName].filter(Boolean).join(" ") || contact.phone;
+  await sendCalendarInvite({
+    to,
+    summary: `Call ${name} — ${campaign.name}`,
+    start: new Date(meeting.startISO),
+    durationMin: meeting.durationMin,
+    description:
+      `${name} proposed a time to talk.\n` +
+      `Call: ${contact.phone}\n` +
+      (contact.email ? `Candidate email: ${contact.email}\n` : "") +
+      `Re: ${campaign.name}\n` +
+      `Their message: "${inboundBody}"`,
+    location: `Call ${contact.phone}`,
+  });
+  console.log(`[recordInbound] calendar invite sent to ${to} for ${name} @ ${meeting.startISO}`);
 }
 
 async function maybeSendPositionEmail(args: {
