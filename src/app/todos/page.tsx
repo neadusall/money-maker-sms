@@ -6,6 +6,7 @@ import { completeTodo, reopenTodo, deleteTodo, toggleCandidateReviewed } from "@
 import { DeleteCorrespondenceButton } from "@/components/DeleteCorrespondenceButton";
 import { ScoreBadge } from "@/components/ScoreBadge";
 import { LocationBadge } from "@/components/LocationBadge";
+import { LinkedInConnectButton } from "@/components/LinkedInConnectButton";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { LiveBadge } from "@/components/LiveBadge";
 import { formatPhone } from "@/lib/phone";
@@ -54,6 +55,7 @@ export default async function TodosPage({
       locationMatch: contacts.locationMatch,
       locationRegion: contacts.locationRegion,
       campaignName: campaigns.name,
+      recruiterName: campaigns.recruiterName,
     })
     .from(todos)
     .innerJoin(contacts, eq(contacts.id, todos.contactId))
@@ -76,6 +78,7 @@ export default async function TodosPage({
       conversationId: string | null;
       linkedin: string;
       linkedinDirect: boolean;
+      connectNote: string;
       reviewed: boolean;
       score: number | null;
       scoreReason: string | null;
@@ -88,6 +91,9 @@ export default async function TodosPage({
     const name = [r.firstName, r.lastName].filter(Boolean).join(" ") || formatPhone(r.phone);
     const sub = [r.jobTitle, r.company].filter(Boolean).join(" · ") || r.campaignName;
     const li = linkedinLink(r.linkedinUrl, name, r.company, r.jobTitle);
+    const first = (r.firstName ?? "").trim() || name.split(" ")[0];
+    const recruiter = (r.recruiterName ?? "").trim() || "Ryan";
+    const connectNote = `Hi ${first}, ${recruiter} here — reaching out about a ${r.campaignName} opportunity that looks aligned with your background. Open to connecting?`;
     const g =
       groups.get(r.contactId) ??
       {
@@ -98,6 +104,7 @@ export default async function TodosPage({
         conversationId: r.conversationId,
         linkedin: li.url,
         linkedinDirect: li.direct,
+        connectNote,
         reviewed: r.reviewedAt != null,
         score: r.score,
         scoreReason: r.scoreReason,
@@ -214,18 +221,7 @@ export default async function TodosPage({
                     </svg>
                     {g.linkedinDirect ? "View" : "Find"}
                   </a>
-                  <a
-                    href={g.linkedin}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title="Opens their LinkedIn profile — click Connect there to send the request"
-                    className="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700"
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-3.5 w-3.5">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M18 7.5v6m3-3h-6m-3.75-1.125a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0ZM3 19.235v-.11a6.375 6.375 0 0 1 12.75 0v.109A12.318 12.318 0 0 1 8.625 21c-2.331 0-4.512-.645-6.374-1.766Z" />
-                    </svg>
-                    Connect
-                  </a>
+                  <LinkedInConnectButton url={g.linkedin} note={g.connectNote} />
                   {g.conversationId ? (
                     <Link
                       href={`/campaigns/${g.campaignId}/inbox/${g.conversationId}`}
