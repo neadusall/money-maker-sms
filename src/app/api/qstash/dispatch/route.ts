@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { Receiver } from "@upstash/qstash";
-import { eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import {
   scheduledMessages,
@@ -78,6 +78,32 @@ export async function POST(request: Request) {
 
   const [contact] = await db.select().from(contacts).where(eq(contacts.id, convo.contactId));
   const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, convo.campaignId));
+
+  // Hard stop: never auto-send if the campaign is paused or in manual mode. This
+  // makes "pause" / "manual" an instant kill switch for queued auto-replies too.
+  if (!campaign || campaign.status !== "active" || campaign.llmMode === "manual") {
+    await db
+      .update(scheduledMessages)
+      .set({ status: "canceled", error: "campaign paused or manual" })
+      .where(eq(scheduledMessages.id, scheduled.id));
+    return NextResponse.json({ ok: true, note: "campaign paused/manual; canceled" });
+  }
+
+  // Don't pile on: if we already sent to this conversation in the last 60s, skip
+  // (guards against rapid duplicate auto-replies).
+  const [recent] = await db
+    .select({ at: messages.createdAt })
+    .from(messages)
+    .where(and(eq(messages.conversationId, scheduled.conversationId), eq(messages.direction, "outbound")))
+    .orderBy(desc(messages.createdAt))
+    .limit(1);
+  if (recent && Date.now() - new Date(recent.at).getTime() < 60_000) {
+    await db
+      .update(scheduledMessages)
+      .set({ status: "canceled", error: "recent outbound; deduped" })
+      .where(eq(scheduledMessages.id, scheduled.id));
+    return NextResponse.json({ ok: true, note: "recent outbound; skipped" });
+  }
 
   if (!contact || contact.optedOut) {
     await db
