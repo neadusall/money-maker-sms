@@ -4,6 +4,7 @@ import { db } from "@/db/client";
 import { todos, contacts, campaigns, type TodoChannel } from "@/db/schema";
 import { completeTodo, reopenTodo, deleteTodo, toggleCandidateReviewed } from "@/lib/actions";
 import { DeleteCorrespondenceButton } from "@/components/DeleteCorrespondenceButton";
+import { DownloadListButton } from "@/components/DownloadListButton";
 import { ScoreBadge } from "@/components/ScoreBadge";
 import { LocationBadge } from "@/components/LocationBadge";
 import { LinkedInConnectButton } from "@/components/LinkedInConnectButton";
@@ -49,6 +50,7 @@ export default async function TodosPage({
       phone: contacts.phone,
       company: contacts.company,
       jobTitle: contacts.jobTitle,
+      email: contacts.email,
       linkedinUrl: contacts.linkedinUrl,
       reviewedAt: contacts.todosReviewedAt,
       score: contacts.qualificationScore,
@@ -120,6 +122,22 @@ export default async function TodosPage({
   // which candidates Ryan has already looked at; it never removes or hides them.
   const grouped = [...groups.values()];
 
+  // CSV export of the current board — one row per candidate, respects the active
+  // channel filter. Includes their LinkedIn URL + contact details + fit score.
+  const seenExport = new Set<string>();
+  const exportRows = rows
+    .filter((r) => (seenExport.has(r.contactId) ? false : (seenExport.add(r.contactId), true)))
+    .map((r) => ({
+      Name: [r.firstName, r.lastName].filter(Boolean).join(" ") || formatPhone(r.phone),
+      Company: r.company ?? "",
+      Title: r.jobTitle ?? "",
+      "LinkedIn URL": r.linkedinUrl ?? "",
+      Phone: r.phone,
+      Email: r.email ?? "",
+      "Fit score": r.score ?? "",
+      Campaign: r.campaignName,
+    }));
+
   return (
     <section className="grid gap-6">
       <AutoRefresh intervalMs={10000} />
@@ -133,6 +151,7 @@ export default async function TodosPage({
             {openCount} open · {doneCount} done across {grouped.length} candidate{grouped.length === 1 ? "" : "s"}
           </p>
         </div>
+        <DownloadListButton rows={exportRows} filename={`todos-${channel ?? "all"}.csv`} />
       </div>
 
       <div className="flex flex-wrap gap-1.5">
