@@ -1025,8 +1025,11 @@ export async function deleteTodo(id: string) {
 /** Kick off background fit-scoring for every unscored contact in a campaign. */
 export async function scoreCampaignContacts(campaignId: string): Promise<void> {
   if (!isQStashConfigured()) return;
+  // Clear any prior "scoring paused" flag so the UI reflects a fresh attempt.
+  await db.update(campaigns).set({ scoringError: null }).where(eq(campaigns.id, campaignId));
   await enqueueScoreDrain(campaignId, 1);
   revalidatePath(`/campaigns/${campaignId}/contacts`);
+  revalidatePath(`/campaigns/${campaignId}`);
 }
 
 /** Set the minimum fit score required to text a contact (null/0 = no filter). */

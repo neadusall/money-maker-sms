@@ -1,5 +1,6 @@
 import type { Campaign } from "@/db/schema";
 import { REGIONS } from "@/lib/region";
+import { OPT_OUT_LINE } from "@/lib/opt-out";
 
 type Action = (formData: FormData) => Promise<void>;
 
@@ -75,6 +76,19 @@ export function CampaignForm({
           defaultValue={campaign?.smsTemplate ?? SAMPLE_TEMPLATE}
           help="Merge tokens pull from each contact's CSV data: {first_name}, {company}, {job_title}, {location}, or any custom column. Only use a token if every contact has that field — otherwise that contact's send is skipped. For the role you're recruiting for, type it directly (it's the same for everyone), don't use {job_title} (that's the candidate's current title)."
         />
+        <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+          <span className="text-xs font-medium text-zinc-700">Every text automatically ends with:</span>
+          <div className="mt-1.5 flex items-start gap-2">
+            <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+              auto-added
+            </span>
+            <span className="text-sm italic text-zinc-600">{OPT_OUT_LINE}</span>
+          </div>
+          <p className="mt-1.5 text-xs text-zinc-500">
+            Required for compliance — appended to the end of every outbound message (you don&apos;t type it). It won&apos;t
+            be added twice if your template already includes it.
+          </p>
+        </div>
         <Field
           label="From number (E.164, optional)"
           name="fromNumber"

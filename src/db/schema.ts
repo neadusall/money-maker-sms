@@ -131,6 +131,10 @@ export const campaigns = pgTable("campaigns", {
   // for every candidate score (keeps prompts small + within rate limits).
   scoringRubric: text("scoring_rubric"),
 
+  // Why bulk scoring last stalled (e.g. "credit" = Anthropic balance too low),
+  // so the UI can show an accurate "scoring paused" reason. Cleared on progress.
+  scoringError: text("scoring_error"),
+
   fromNumber: text("from_number"),
 
   sendWindowStart: text("send_window_start").default("09:00").notNull(),

@@ -9,9 +9,9 @@ import { ensureRubric } from "@/lib/rubric";
 
 export const maxDuration = 60;
 
-// Keep concurrency low: too many simultaneous LLM calls trip Anthropic rate
-// limits, and a rate-limited call used to get permanently stamped as a failure.
-const SCORE_BATCH = 5;
+// Concurrency per pass. Failed calls are now retried (not permanently stamped),
+// so we can run a healthy batch; the SDK's own backoff handles brief 429s.
+const SCORE_BATCH = 12;
 // After this many consecutive zero-progress passes, stop re-enqueuing (the API
 // is almost certainly down/throttled) instead of looping forever. Unscored
 // contacts stay null so they show as "—" and can be re-scored later.
@@ -54,6 +54,7 @@ export async function POST(request: Request) {
 
   let scored = 0;
   let failed = 0;
+  const errors: string[] = [];
   await Promise.all(
     batch.map(async (contact) => {
       const { score, enriched, fetched, locationRegion, locationMatch } = await scoreContactDeep({
@@ -61,7 +62,10 @@ export async function POST(request: Request) {
         contact,
         model: BULK_MODEL,
         rubric,
-      }).catch(() => ({ score: null, enriched: null, fetched: false, locationRegion: null, locationMatch: null }));
+      }).catch((e) => {
+        errors.push(e instanceof Error ? e.message : String(e));
+        return { score: null, enriched: null, fetched: false, locationRegion: null, locationMatch: null };
+      });
 
       if (score) {
         await db
@@ -95,6 +99,17 @@ export async function POST(request: Request) {
     .select({ remaining: sql<number>`count(*)::int` })
     .from(contacts)
     .where(selector);
+
+  // Surface a hard billing block to the UI so the banner is honest about why
+  // scoring isn't progressing. Cleared as soon as any contact scores.
+  const creditBlocked = errors.some((m) => /credit balance|too low|billing|insufficient|payment|quota/i.test(m));
+  if (scored > 0) {
+    if (campaign.scoringError) {
+      await db.update(campaigns).set({ scoringError: null }).where(eq(campaigns.id, campaignId));
+    }
+  } else if (creditBlocked && campaign.scoringError !== "credit") {
+    await db.update(campaigns).set({ scoringError: "credit" }).where(eq(campaigns.id, campaignId));
+  }
 
   if (remaining > 0) {
     // No progress this pass → likely rate-limited; back off and count the stall.

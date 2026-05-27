@@ -10,6 +10,7 @@ import {
   sendManualReply,
 } from "@/lib/actions";
 import { formatPhone } from "@/lib/phone";
+import { OPT_OUT_LINE, hasOptOut } from "@/lib/opt-out";
 import { shortRelative, timeOfDay } from "@/lib/time";
 import { Avatar } from "@/components/Avatar";
 import { StatusIcon } from "@/components/StatusIcon";
@@ -218,6 +219,9 @@ function MessageBubble({ message }: { message: Msg }) {
           }
         >
           <div className="whitespace-pre-wrap break-words">{message.body}</div>
+          {out && !hasOptOut(message.body) ? (
+            <div className="mt-1 border-t border-white/25 pt-1 text-[11px] italic text-sky-100">{OPT_OUT_LINE}</div>
+          ) : null}
         </div>
         <div
           className={

@@ -221,7 +221,21 @@ export default async function CampaignDetail({
         </div>
       ) : null}
 
-      {unscored > 0 ? (
+      {unscored > 0 && campaign.scoringError === "credit" ? (
+        <div className="flex items-start gap-2 rounded-xl border border-rose-300 bg-rose-50 p-4 text-sm text-rose-900">
+          <svg className="mt-0.5 h-4 w-4 shrink-0 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+          </svg>
+          <span>
+            <strong>Scoring paused — Anthropic credit needs topping up.</strong> {unscored} candidate
+            {unscored === 1 ? "" : "s"} can&apos;t be scored because the Anthropic API balance is too low. Add credit at{" "}
+            <a href="https://console.anthropic.com/settings/billing" target="_blank" rel="noopener noreferrer" className="font-semibold underline">
+              console.anthropic.com → Billing
+            </a>
+            , then click <strong>Score now</strong> on the Contacts page. Sending stays paused until everyone is scored.
+          </span>
+        </div>
+      ) : unscored > 0 ? (
         <div className="flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 p-4 text-sm text-violet-900">
           <svg className="h-4 w-4 shrink-0 animate-spin text-violet-500" viewBox="0 0 24 24" fill="none">
             <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" className="opacity-25" />
