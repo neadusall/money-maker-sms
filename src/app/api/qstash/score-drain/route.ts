@@ -4,19 +4,20 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { campaigns, contacts } from "@/db/schema";
 import { verifyQStashSignature, enqueueScoreDrain } from "@/lib/schedule";
-import { scoreContactDeep } from "@/lib/qualify";
+import { scoreCandidatesBatch } from "@/lib/qualify";
 import { ensureRubric } from "@/lib/rubric";
+import { regionForLocation } from "@/lib/region";
 
 export const maxDuration = 60;
 
-// Concurrency per pass. Failed calls are now retried (not permanently stamped),
-// so we can run a healthy batch; the SDK's own backoff handles brief 429s.
-const SCORE_BATCH = 12;
+// Candidates scored per LLM call. Batch scoring amortizes the (cached) rubric
+// across the group, cutting cost ~5x vs one-call-per-candidate.
+const SCORE_BATCH = 20;
 // After this many consecutive zero-progress passes, stop re-enqueuing (the API
 // is almost certainly down/throttled) instead of looping forever. Unscored
 // contacts stay null so they show as "—" and can be re-scored later.
 const MAX_STALLS = 8;
-// Cheaper/faster model for bulk list scoring.
+// Model for bulk list scoring.
 const BULK_MODEL = "claude-sonnet-4-6";
 
 export async function POST(request: Request) {
@@ -55,45 +56,36 @@ export async function POST(request: Request) {
   let scored = 0;
   let failed = 0;
   const errors: string[] = [];
-  await Promise.all(
-    batch.map(async (contact) => {
-      const { score, enriched, fetched, locationRegion, locationMatch } = await scoreContactDeep({
-        campaign,
-        contact,
-        model: BULK_MODEL,
-        rubric,
-      }).catch((e) => {
-        errors.push(e instanceof Error ? e.message : String(e));
-        return { score: null, enriched: null, fetched: false, locationRegion: null, locationMatch: null };
-      });
 
-      if (score) {
-        await db
-          .update(contacts)
-          .set({
-            qualificationScore: score.score,
-            qualificationReason: score.reason,
-            locationRegion,
-            locationMatch,
-            enrichedAt: new Date(),
-            ...(fetched ? { enrichedProfile: (enriched as unknown as Record<string, unknown>) ?? null } : {}),
-          })
-          .where(eq(contacts.id, contact.id));
-        scored++;
-      } else {
-        // Scoring failed (rate limit / transient). Leave qualificationScore NULL
-        // so this contact is retried, but cache any profile we fetched so we
-        // don't re-pay the enrichment API on the retry.
-        failed++;
-        if (fetched) {
-          await db
-            .update(contacts)
-            .set({ enrichedAt: new Date(), enrichedProfile: (enriched as unknown as Record<string, unknown>) ?? null })
-            .where(eq(contacts.id, contact.id));
-        }
-      }
-    }),
-  );
+  // One LLM call scores the whole batch.
+  const scores = await scoreCandidatesBatch({ campaign, contacts: batch, model: BULK_MODEL, rubric }).catch((e) => {
+    errors.push(e instanceof Error ? e.message : String(e));
+    return new Map<string, { score: number; reason: string }>();
+  });
+
+  const targets = campaign.targetRegion ? campaign.targetRegion.split(",") : null;
+  for (const contact of batch) {
+    const s = scores.get(contact.id);
+    if (!s) {
+      // Omitted/failed this pass → leave NULL so it's retried next pass.
+      failed++;
+      continue;
+    }
+    // Modest location nudge (free, local): +3 in target region, -6 if knowably out.
+    const locationRegion = regionForLocation(contact.location);
+    let locationMatch: boolean | null = null;
+    let finalScore = s.score;
+    if (targets) {
+      locationMatch = locationRegion != null && targets.includes(locationRegion);
+      const adj = locationMatch ? 3 : locationRegion != null ? -6 : 0;
+      finalScore = Math.max(1, Math.min(100, finalScore + adj));
+    }
+    await db
+      .update(contacts)
+      .set({ qualificationScore: finalScore, qualificationReason: s.reason, locationRegion, locationMatch, enrichedAt: new Date() })
+      .where(eq(contacts.id, contact.id));
+    scored++;
+  }
 
   const [{ remaining }] = await db
     .select({ remaining: sql<number>`count(*)::int` })

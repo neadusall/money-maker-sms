@@ -40,7 +40,7 @@ export async function buildScoringRubric(positionSummary: string): Promise<strin
   }
 }
 
-const SYSTEM = `You are an expert recruiter screening candidates against the role rubric. Rate fit 1-100. Lean GENEROUS — look for reasons a candidate COULD be a fit, not reasons to reject.
+const SYSTEM_RULES = `You are an expert recruiter screening candidates against the role rubric. Rate fit 1-100. Lean GENEROUS — look for reasons a candidate COULD be a fit, not reasons to reject.
 
 CRITICAL RULES:
 - Industry/domain (including "SaaS") is NEVER a disqualifier or a floor requirement. If the rubric frames an industry as must-have/knockout, IGNORE that — industry is only a bonus on top.
@@ -53,9 +53,19 @@ CALIBRATION (lean high; still use the full range):
 - 70-84: senior sales leader (VP/Dir/Head/Regional) at a substantial or recognizable B2B company in ANY industry — this is the COMMON bucket for genuine sales leaders; default here.
 - 55-69: sales leadership at a smaller/unknown company, a strong mid-level seller, or some ambiguity in seniority.
 - 40-54: junior management or unclear/limited sales-leadership signal.
-- under 40: clearly NOT a sales leader (individual contributor with no leadership, junior, or an ops/product/marketing/non-sales role), or an unrelated function.
+- under 40: clearly NOT a sales leader (individual contributor with no leadership, junior, or an ops/product/marketing/non-sales role), or an unrelated function.`;
+
+const SYSTEM = `${SYSTEM_RULES}
 
 Output ONLY a JSON object: {"score": <integer 1-100>, "reason": "<=280 chars; cite the title + company signal you used>"}. No markdown, no preamble.`;
+
+// Batch variant: score many candidates in one call to cut cost ~5x (same model,
+// same calibration). Returns a JSON array keyed by the candidate's number.
+const BATCH_SYSTEM = `${SYSTEM_RULES}
+
+You will receive a NUMBERED list of candidates. Score EVERY candidate. Output ONLY a JSON array, one object per candidate, no markdown, no preamble:
+[{"n": <candidate number>, "score": <integer 1-100>, "reason": "<=120 chars; cite title + company briefly>"}, ...]
+Include all candidates exactly once. Keep reasons terse.`;
 
 /**
  * Score a candidate's fit for the campaign's role using the LLM. Based on the
@@ -135,6 +145,79 @@ export async function scoreCandidate(args: {
   } catch {
     return null;
   }
+}
+
+/**
+ * Score MANY candidates in a single LLM call (cheap bulk scoring). Same model +
+ * calibration as scoreCandidate, but ~5x cheaper by amortizing the (cached)
+ * rubric across the batch. Scores from title/company/location (+ cached
+ * enrichment when present); does NOT fetch new enrichment. Pure — caller
+ * persists results. Returns a map of contactId -> score; any candidate the model
+ * omits or returns junk for is simply absent (caller leaves it unscored to retry).
+ */
+export async function scoreCandidatesBatch(args: {
+  campaign: Campaign;
+  contacts: Contact[];
+  model?: string;
+  rubric?: string;
+}): Promise<Map<string, QualScore>> {
+  const out = new Map<string, QualScore>();
+  if (!process.env.ANTHROPIC_API_KEY || args.contacts.length === 0) return out;
+  if (!args.rubric && !args.campaign.positionSummary?.trim()) return out;
+
+  const lines = args.contacts.map((c, i) => {
+    const enr = c.enrichedProfile ? enrichmentToText(c.enrichedProfile as EnrichedProfile).slice(0, 300) : null;
+    const who = [
+      [c.firstName, c.lastName].filter(Boolean).join(" ") || null,
+      c.jobTitle ? `Title: ${c.jobTitle}` : null,
+      c.company ? `Co: ${c.company}` : null,
+      c.location ? `Loc: ${c.location}` : null,
+      enr ? `LinkedIn: ${enr}` : null,
+    ].filter(Boolean).join("; ");
+    return `${i + 1}. ${who || "(little known)"}`;
+  }).join("\n");
+
+  const userBlocks: Anthropic.Messages.TextBlockParam[] = [
+    {
+      type: "text",
+      text: args.rubric ? `ROLE REQUIREMENTS (scoring rubric)\n${args.rubric}` : `JOB / POSITION SUMMARY\n${args.campaign.positionSummary}`,
+      cache_control: { type: "ephemeral" },
+    },
+    { type: "text", text: `CANDIDATES (score each 1-100):\n${lines}` },
+  ];
+
+  const model = args.model ?? CLAUDE_MODEL;
+  const response = await anthropic().messages.create({
+    model,
+    max_tokens: Math.min(8000, 90 * args.contacts.length + 200),
+    system: BATCH_SYSTEM,
+    messages: [{ role: "user", content: userBlocks }],
+  });
+  await recordLlmUsage({ model, usage: response.usage, purpose: "score", campaignId: args.campaign.id });
+
+  const text = response.content
+    .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("")
+    .trim();
+
+  try {
+    const start = text.indexOf("[");
+    const end = text.lastIndexOf("]");
+    if (start === -1 || end === -1) return out;
+    const arr = JSON.parse(text.slice(start, end + 1)) as { n?: unknown; score?: unknown; reason?: unknown }[];
+    for (const o of arr) {
+      const idx = Math.round(Number(o.n)) - 1;
+      if (!Number.isInteger(idx) || idx < 0 || idx >= args.contacts.length) continue;
+      let s = Math.round(Number(o.score));
+      if (!Number.isFinite(s)) continue;
+      s = Math.max(1, Math.min(100, s));
+      out.set(args.contacts[idx].id, { score: s, reason: String(o.reason ?? "").slice(0, 280) });
+    }
+  } catch {
+    return out;
+  }
+  return out;
 }
 
 /**
