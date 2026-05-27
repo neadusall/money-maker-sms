@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/db/client";
 import { messages, contacts, conversations } from "@/db/schema";
 import { recordInbound } from "@/lib/actions";
@@ -97,13 +97,20 @@ export async function POST(request: Request) {
           .where(eq(messages.telnyxId, payload.id))
           .returning({ id: messages.id, conversationId: messages.conversationId });
 
+        // Delivery/failure receipts often arrive AFTER a candidate has already
+        // replied (or opted out). Only update the contact from a pre-delivery
+        // state — never downgrade 'replied'/'opted_out'/'delivered'.
+        const PRE_DELIVERY = ["pending", "queued", "sent"] as const;
         if (updated && mapped === "delivered") {
           const [convo] = await db
             .select({ contactId: conversations.contactId })
             .from(conversations)
             .where(eq(conversations.id, updated.conversationId));
           if (convo) {
-            await db.update(contacts).set({ status: "delivered" }).where(eq(contacts.id, convo.contactId));
+            await db
+              .update(contacts)
+              .set({ status: "delivered" })
+              .where(and(eq(contacts.id, convo.contactId), inArray(contacts.status, [...PRE_DELIVERY])));
           }
         }
         if (updated && mapped === "failed") {
@@ -115,7 +122,7 @@ export async function POST(request: Request) {
             await db
               .update(contacts)
               .set({ status: "failed", lastError: errorText })
-              .where(eq(contacts.id, convo.contactId));
+              .where(and(eq(contacts.id, convo.contactId), inArray(contacts.status, [...PRE_DELIVERY])));
           }
         }
       }

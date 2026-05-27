@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { and, count, eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
-import { campaigns, contacts, conversations } from "@/db/schema";
+import { campaigns, contacts, conversations, messages } from "@/db/schema";
 import {
   deleteCampaign,
   startCampaignSend,
@@ -49,9 +49,14 @@ export default async function CampaignDetail({
     .where(eq(contacts.campaignId, id));
 
   const [convoStats] = await db
-    .select({ needsAttention: count() })
+    .select({
+      needsAttention: sql<number>`count(*) filter (where ${conversations.status} = 'needs_attention')::int`,
+      // True reply count: conversations that received an inbound (robust against
+      // delivery-receipt status churn).
+      replied: sql<number>`count(*) filter (where exists (select 1 from messages m where m.conversation_id = ${conversations.id} and m.direction = 'inbound'))::int`,
+    })
     .from(conversations)
-    .where(and(eq(conversations.campaignId, id), eq(conversations.status, "needs_attention")));
+    .where(eq(conversations.campaignId, id));
 
   // Reply-sentiment breakdown from the AI classifications on replied threads.
   const classRows = await db
@@ -85,7 +90,7 @@ export default async function CampaignDetail({
   const total = stats?.total ?? 0;
   const sent = stats?.sent ?? 0;
   const delivered = stats?.delivered ?? 0;
-  const replied = stats?.replied ?? 0;
+  const replied = convoStats?.replied ?? 0;
   const classified = positive + neutral + negative;
   const deliveryRate = pct(delivered, sent);
   const replyRate = pct(replied, delivered);

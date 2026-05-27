@@ -756,8 +756,8 @@ export async function recordInbound(args: {
 
   // If the candidate proposed a concrete time ("call me at 4 EST"), drop a
   // calendar invite on your calendar with their number to call. Best-effort.
-  await maybeAddToCalendar({ campaign, contact, inboundBody: args.body }).catch((err) => {
-    console.error("[recordInbound] calendar invite failed:", err);
+  await maybeAddToCalendar({ campaign, contact, conversationId: convo.id, inboundBody: args.body }).catch((err) => {
+    console.error("[recordInbound] calendar/reminder failed:", err);
   });
 
   // Await classification: on serverless (Vercel), fire-and-forget async work is
@@ -787,27 +787,48 @@ export async function recordInbound(args: {
 async function maybeAddToCalendar(args: {
   campaign: Campaign;
   contact: Contact;
+  conversationId: string;
   inboundBody: string;
 }): Promise<void> {
-  const { campaign, contact, inboundBody } = args;
-  if (!isCalendarConfigured()) return;
+  const { campaign, contact, conversationId, inboundBody } = args;
   if (contact.optedOut) return;
   if (!mightProposeTime(inboundBody)) return;
 
   const tz = process.env.APP_TIMEZONE ?? "America/New_York";
-  const meeting = await extractMeeting(inboundBody, { nowISO: new Date().toISOString(), tz });
-  if (!meeting) return;
-
-  // Use the recruiter's email (per Ryan: their calendar, not the candidate's).
-  const to = campaign.recruiterEmail || process.env.CALENDAR_INVITE_TO || process.env.SMTP_USER;
-  if (!to) return;
+  const sched = await extractMeeting(inboundBody, { nowISO: new Date().toISOString(), tz });
+  if (!sched) return;
 
   const name = [contact.firstName, contact.lastName].filter(Boolean).join(" ") || contact.phone;
+
+  // Day-only ("next Tuesday", "Friday") → a HIGHLIGHTED To-do reminder to reach
+  // out that day (no exact time to put on the calendar).
+  if (sched.kind === "day") {
+    await db
+      .insert(todos)
+      .values({
+        campaignId: campaign.id,
+        contactId: contact.id,
+        conversationId,
+        action: `Reach out to ${name} — they said ${sched.label}`,
+        channel: "call",
+        detail: `No exact time given (they said "${sched.label}"). Call ${contact.phone}. Their message: "${inboundBody}"`,
+        source: "callback",
+        dedupeKey: "callback",
+      })
+      .onConflictDoNothing({ target: [todos.conversationId, todos.dedupeKey] });
+    console.log(`[recordInbound] highlighted to-do for ${name} — ${sched.label}`);
+    return;
+  }
+
+  // Concrete time → calendar invite to the recruiter (their calendar, not the candidate).
+  if (!isCalendarConfigured()) return;
+  const to = campaign.recruiterEmail || process.env.CALENDAR_INVITE_TO || process.env.SMTP_USER;
+  if (!to) return;
   await sendCalendarInvite({
     to,
     summary: `Call ${name} — ${campaign.name}`,
-    start: new Date(meeting.startISO),
-    durationMin: meeting.durationMin,
+    start: new Date(sched.startISO),
+    durationMin: sched.durationMin,
     description:
       `${name} proposed a time to talk.\n` +
       `Call: ${contact.phone}\n` +
@@ -816,7 +837,7 @@ async function maybeAddToCalendar(args: {
       `Their message: "${inboundBody}"`,
     location: `Call ${contact.phone}`,
   });
-  console.log(`[recordInbound] calendar invite sent to ${to} for ${name} @ ${meeting.startISO}`);
+  console.log(`[recordInbound] calendar invite sent to ${to} for ${name} @ ${sched.startISO}`);
 }
 
 async function maybeSendPositionEmail(args: {

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { desc, sql } from "drizzle-orm";
 import { db } from "@/db/client";
-import { campaigns, contacts, conversations } from "@/db/schema";
+import { campaigns, contacts, conversations, messages } from "@/db/schema";
 import { deleteCampaign } from "@/lib/actions";
 import { DeleteCampaignButton } from "@/components/DeleteCampaignButton";
 import { AutoRefresh } from "@/components/AutoRefresh";
@@ -43,6 +43,9 @@ export default async function Dashboard() {
     .select({
       campaignId: conversations.campaignId,
       needsAttention: sql<number>`count(*) filter (where ${conversations.status} = 'needs_attention')::int`,
+      // True reply count: conversations that actually received an inbound message.
+      // (Don't rely on contacts.status='replied' — delivery receipts can churn it.)
+      replied: sql<number>`count(*) filter (where exists (select 1 from messages m where m.conversation_id = ${conversations.id} and m.direction = 'inbound'))::int`,
     })
     .from(conversations)
     .groupBy(conversations.campaignId);
@@ -77,7 +80,7 @@ export default async function Dashboard() {
       contactCount: ca?.total ?? 0,
       sentCount: ca?.sent ?? 0,
       delivered: ca?.delivered ?? 0,
-      replied: ca?.replied ?? 0,
+      replied: va?.replied ?? 0,
       emailsSent: ca?.emailsSent ?? 0,
       needsAttention: va?.needsAttention ?? 0,
       senti,

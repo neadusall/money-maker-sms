@@ -17,18 +17,25 @@ export function mightProposeTime(text: string): boolean {
   return TIME_HINT.test(text);
 }
 
-export type Meeting = { startISO: string; durationMin: number; summary: string };
+// Either a concrete date+time (→ calendar invite) or a day-only mention like
+// "next Tuesday" / "Friday" (→ a highlighted To-do reminder, since there's no
+// exact time to book).
+export type Schedule =
+  | { kind: "time"; startISO: string; durationMin: number; summary: string }
+  | { kind: "day"; label: string };
 
-/** Use a cheap model to pull a CONCRETE proposed time out of a free-text reply. */
+/** Use a cheap model to pull a proposed time OR day out of a free-text reply. */
 export async function extractMeeting(
   text: string,
   opts: { nowISO: string; tz: string },
-): Promise<Meeting | null> {
+): Promise<Schedule | null> {
   if (!process.env.ANTHROPIC_API_KEY) return null;
-  const system = `You extract a proposed meeting/call time from a candidate's SMS reply.
-Right now it is ${opts.nowISO}. Default timezone if none is stated: ${opts.tz}.
-Output ONLY JSON, no prose: {"proposed": <bool>, "startISO": "<ISO8601 with timezone offset>" | null, "durationMin": <int>, "summary": "<short>"}.
-Set proposed=true ONLY if the reply gives a CONCRETE date AND time (resolve "today", "tomorrow", "4pm EST", "Tuesday at 2", etc. into an absolute future datetime with offset; honor any timezone they mention, else use the default). If it's vague ("sometime next week", "tomorrow" with no time, "let me check"), set proposed=false and startISO=null. durationMin defaults to 30.`;
+  const system = `You read a candidate's SMS reply and decide if they proposed when to talk.
+Right now it is ${opts.nowISO}. Default timezone if none stated: ${opts.tz}.
+Output ONLY JSON, no prose: {"kind":"time"|"day"|"none","startISO":"<ISO8601 w/ offset>"|null,"durationMin":<int>,"label":"<short human label>","summary":"<short>"}.
+- "time": they gave a CONCRETE date AND clock time (e.g. "4pm EST today", "Tuesday at 2"). Resolve to an absolute FUTURE datetime in startISO (honor any timezone they state, else default). durationMin defaults 30.
+- "day": they named a specific day but NO clock time (e.g. "next Tuesday", "Friday", "tomorrow" with no time). Put a short human label in "label" (e.g. "Tuesday Jun 3").
+- "none": vague or no scheduling ("sometime next week", "let me check", no day at all).`;
   try {
     const r = await anthropic().messages.create({
       model: "claude-haiku-4-5-20251001",
@@ -46,19 +53,29 @@ Set proposed=true ONLY if the reply gives a CONCRETE date AND time (resolve "tod
     const e = out.lastIndexOf("}");
     if (s === -1 || e === -1) return null;
     const obj = JSON.parse(out.slice(s, e + 1)) as {
-      proposed?: unknown;
+      kind?: unknown;
       startISO?: unknown;
       durationMin?: unknown;
+      label?: unknown;
       summary?: unknown;
     };
-    if (!obj.proposed || !obj.startISO) return null;
-    const start = new Date(String(obj.startISO));
-    if (isNaN(start.getTime()) || start.getTime() < Date.now() - 5 * 60_000) return null; // must be (near-)future
-    return {
-      startISO: start.toISOString(),
-      durationMin: Number(obj.durationMin) > 0 ? Math.min(240, Number(obj.durationMin)) : 30,
-      summary: String(obj.summary ?? "").slice(0, 120),
-    };
+    if (obj.kind === "time" && obj.startISO) {
+      const start = new Date(String(obj.startISO));
+      if (isNaN(start.getTime()) || start.getTime() < Date.now() - 5 * 60_000) {
+        // Concrete time but already past / unparseable — treat the day as a reminder.
+        return obj.label ? { kind: "day", label: String(obj.label).slice(0, 60) } : null;
+      }
+      return {
+        kind: "time",
+        startISO: start.toISOString(),
+        durationMin: Number(obj.durationMin) > 0 ? Math.min(240, Number(obj.durationMin)) : 30,
+        summary: String(obj.summary ?? "").slice(0, 120),
+      };
+    }
+    if (obj.kind === "day" && obj.label) {
+      return { kind: "day", label: String(obj.label).slice(0, 60) };
+    }
+    return null;
   } catch {
     return null;
   }

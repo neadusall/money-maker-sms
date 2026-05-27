@@ -39,6 +39,7 @@ export default async function TodosPage({
       channel: todos.channel,
       detail: todos.detail,
       status: todos.status,
+      source: todos.source,
       createdAt: todos.createdAt,
       campaignId: todos.campaignId,
       conversationId: todos.conversationId,
@@ -239,10 +240,17 @@ export default async function TodosPage({
                   .sort((a, b) => Number(a.status === "done") - Number(b.status === "done"))
                   .map((t) => {
                     const done = t.status === "done";
+                    const isCallback = t.source === "callback";
                     const toggle = (done ? reopenTodo : completeTodo).bind(null, t.id);
                     const del = deleteTodo.bind(null, t.id);
                     return (
-                      <li key={t.id} className="flex items-start gap-3 py-2.5">
+                      <li
+                        key={t.id}
+                        className={
+                          "flex items-start gap-3 py-2.5 " +
+                          (isCallback && !done ? "-mx-2 rounded-lg bg-amber-50 px-2 ring-1 ring-amber-200" : "")
+                        }
+                      >
                         <form action={toggle} className="pt-0.5">
                           <button
                             title={done ? "Done — click to mark not done" : "Mark done (stays on the board)"}
@@ -261,8 +269,13 @@ export default async function TodosPage({
                           </button>
                         </form>
                         <div className="min-w-0 flex-1">
-                          <div className={"text-sm " + (done ? "text-zinc-400 line-through" : "text-zinc-900")}>
-                            {t.action}
+                          <div className={"flex flex-wrap items-center gap-1.5 text-sm " + (done ? "text-zinc-400 line-through" : "text-zinc-900")}>
+                            {isCallback && !done ? (
+                              <span className="rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
+                                ⏰ Follow up
+                              </span>
+                            ) : null}
+                            <span>{t.action}</span>
                           </div>
                           {t.detail ? <div className="mt-0.5 text-xs text-zinc-500">{t.detail}</div> : null}
                         </div>
