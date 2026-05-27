@@ -13,6 +13,10 @@ const PROFILE_COST = Number(process.env.RAPIDAPI_PROFILE_COST ?? "0.00267");
 const HETZNER_MO = Number(process.env.HETZNER_MONTHLY ?? "8");
 const RAPIDAPI_MO = Number(process.env.RAPIDAPI_MONTHLY ?? "40");
 const TZ = process.env.APP_TIMEZONE ?? "America/Chicago";
+// Chars added to every outbound body at send time: "\n\nReply STOP to opt out."
+const OPT_OUT_LEN = 24;
+// SQL: estimated Telnyx segment count for an outbound `body` (GSM-7 assumption).
+const OUTBOUND_SEGMENTS = sql`CASE WHEN char_length(body) + ${OPT_OUT_LEN} <= 160 THEN 1 ELSE ceil((char_length(body) + ${OPT_OUT_LEN})::numeric / 153) END`;
 
 function usd(n: number): string {
   return "$" + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -37,9 +41,14 @@ export default async function SpendPage() {
   const byPurpose = await many(sql`
     SELECT purpose, coalesce(sum(cost_usd),0)::float c, count(*)::int n
     FROM usage_events GROUP BY purpose ORDER BY c DESC`);
+  // Telnyx bills per SEGMENT, not per message: 1 segment <=160 chars, else 153
+  // chars/segment. Outbound bodies are stored without the appended opt-out line,
+  // so add its length (OPT_OUT_LEN) to estimate the real billed segment count.
   const msg = await one(sql`
     SELECT count(*) FILTER (WHERE direction='outbound')::int outb,
            count(*) FILTER (WHERE direction='inbound')::int inb,
+           coalesce(sum(${OUTBOUND_SEGMENTS}) FILTER (WHERE direction='outbound'),0)::int outb_seg,
+           coalesce(sum(${OUTBOUND_SEGMENTS}) FILTER (WHERE direction='outbound' AND created_at >= date_trunc('month', now())),0)::int outb_seg_m,
            count(*) FILTER (WHERE direction='outbound' AND created_at >= date_trunc('month', now()))::int outb_m,
            count(*) FILTER (WHERE direction='inbound' AND created_at >= date_trunc('month', now()))::int inb_m
     FROM messages`);
@@ -58,7 +67,7 @@ export default async function SpendPage() {
     FROM (
       SELECT (created_at AT TIME ZONE ${TZ})::date AS day, cost_usd::float AS cost, 'llm' AS src FROM usage_events
       UNION ALL
-      SELECT (created_at AT TIME ZONE ${TZ})::date, (CASE WHEN direction='outbound' THEN ${SMS_OUT}::float ELSE ${SMS_IN}::float END), 'sms' FROM messages
+      SELECT (created_at AT TIME ZONE ${TZ})::date, (CASE WHEN direction='outbound' THEN (${OUTBOUND_SEGMENTS}) * ${SMS_OUT}::float ELSE ${SMS_IN}::float END), 'sms' FROM messages
       UNION ALL
       SELECT (enriched_at AT TIME ZONE ${TZ})::date, ${PROFILE_COST}::float, 'li' FROM contacts WHERE enriched_profile IS NOT NULL AND enriched_at IS NOT NULL
     ) t
@@ -66,11 +75,13 @@ export default async function SpendPage() {
     GROUP BY day ORDER BY day DESC`);
 
   const outb = Number(msg.outb ?? 0), inb = Number(msg.inb ?? 0), outbM = Number(msg.outb_m ?? 0), inbM = Number(msg.inb_m ?? 0);
+  const outbSeg = Number(msg.outb_seg ?? 0), outbSegM = Number(msg.outb_seg_m ?? 0);
   const enriched = Number(li.enriched ?? 0), enrichedM = Number(li.enriched_m ?? 0);
   const llmTotal = Number(llm.total ?? 0), llmMonth = Number(llm.mtd ?? 0);
 
-  const smsCost = outb * SMS_OUT + inb * SMS_IN;
-  const smsCostM = outbM * SMS_OUT + inbM * SMS_IN;
+  // Outbound billed by segment; inbound per message.
+  const smsCost = outbSeg * SMS_OUT + inb * SMS_IN;
+  const smsCostM = outbSegM * SMS_OUT + inbM * SMS_IN;
   const liCost = enriched * PROFILE_COST;
   const liCostM = enrichedM * PROFILE_COST;
 
@@ -189,7 +200,7 @@ export default async function SpendPage() {
       {/* Breakdown by service */}
       <div className="grid gap-3 lg:grid-cols-3">
         <Panel title="Telnyx — SMS" total={usd(smsCost)} sub="all-time">
-          <Line label={`Outbound (${outb})`} detail={`@ ${usd(SMS_OUT)}/msg`} value={usd(outb * SMS_OUT)} />
+          <Line label={`Outbound (${outb} msgs → ${outbSeg} segs)`} detail={`@ ${usd(SMS_OUT)}/seg`} value={usd(outbSeg * SMS_OUT)} />
           <Line label={`Inbound (${inb})`} detail={`@ ${usd(SMS_IN)}/msg`} value={usd(inb * SMS_IN)} />
         </Panel>
 
@@ -214,12 +225,29 @@ export default async function SpendPage() {
         </Panel>
       </div>
 
-      <p className="text-xs text-zinc-400">
-        LLM cost is metered from actual token usage per call. SMS and LinkedIn are estimated from volume × per-unit rates
-        ({usd(SMS_OUT)}/{usd(SMS_IN)} per outbound/inbound SMS, {usd(PROFILE_COST)}/profile) — adjust via the
-        SMS_OUT_COST / SMS_IN_COST / RAPIDAPI_PROFILE_COST env vars. Fixed monthly: Hetzner {usd(HETZNER_MO)}, RapidAPI
-        plan {usd(RAPIDAPI_MO)}. Neon + QStash are on free tiers.
-      </p>
+      <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-xs text-zinc-500">
+        <p className="font-medium text-zinc-700">How each number is tracked</p>
+        <ul className="mt-1.5 list-disc space-y-1 pl-4">
+          <li>
+            <strong>LLM (Anthropic) — exact.</strong> Every Claude call (scoring, rubric, reply classification &amp;
+            drafting, to-do extraction) logs its real token usage and cost the instant it runs, so this updates live as
+            each list is scored.
+          </li>
+          <li>
+            <strong>SMS (Telnyx) — segment-estimated.</strong> Outbound is billed per 153-char segment (incl. the
+            appended &quot;Reply STOP to opt out.&quot; line), {usd(SMS_OUT)}/segment; inbound {usd(SMS_IN)}/message.
+            Assumes standard (GSM-7) text.
+          </li>
+          <li>
+            <strong>LinkedIn (RapidAPI) — per profile pulled,</strong> {usd(PROFILE_COST)}/profile, within the{" "}
+            {usd(RAPIDAPI_MO)}/mo plan (15,000 requests). Lookups that return nothing aren&apos;t charged here.
+          </li>
+          <li>
+            <strong>Fixed monthly:</strong> Hetzner {usd(HETZNER_MO)} + RapidAPI {usd(RAPIDAPI_MO)}. Neon + QStash are on
+            free tiers. Rates are overridable via the SMS_OUT_COST / SMS_IN_COST / RAPIDAPI_PROFILE_COST env vars.
+          </li>
+        </ul>
+      </div>
     </section>
   );
 }
