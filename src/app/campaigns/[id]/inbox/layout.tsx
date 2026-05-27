@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { campaigns, contacts, conversations, messages } from "@/db/schema";
 import { ConversationList, type ConversationListItem } from "@/components/ConversationList";
@@ -45,16 +45,12 @@ export default async function InboxLayout({
       lastMessagesSubquery,
       sql`${lastMessagesSubquery.conversationId} = ${conversations.id} and ${lastMessagesSubquery.rn} = 1`,
     )
-    .where(
-      and(
-        eq(conversations.campaignId, id),
-        // The inbox is for correspondence — only show threads where the
-        // candidate actually replied at least once.
-        sql`exists (select 1 from messages m where m.conversation_id = ${conversations.id} and m.direction = 'inbound')`,
-      ),
-    )
+    // Show EVERY thread in this campaign — including the ones you've texted that
+    // haven't replied yet — so "All" reflects all outbound communication, not
+    // just repliers. The filter chips (Needs attention / Active / etc.) narrow it.
+    .where(eq(conversations.campaignId, id))
     .orderBy(desc(conversations.lastMessageAt))
-    .limit(500);
+    .limit(5000);
 
   const list: ConversationListItem[] = rows.map((r) => ({
     id: r.id,
