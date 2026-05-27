@@ -120,8 +120,8 @@ export const campaigns = pgTable("campaigns", {
   salesNavUrl: text("sales_nav_url"),
 
   // Only text contacts whose fit score is >= this (null = no fit filter).
-  // Defaults to 65 so campaigns never text below-bar candidates unless lowered.
-  minScoreToSend: integer("min_score_to_send").default(65),
+  // Defaults to 60 so campaigns never text below-bar candidates unless lowered.
+  minScoreToSend: integer("min_score_to_send").default(60),
 
   // Target geographic region for this role (used as a modest scoring signal +
   // a location checkmark). e.g. "East Coast", "West Coast", "Midwest", "Central States".

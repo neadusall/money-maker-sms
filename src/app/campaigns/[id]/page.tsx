@@ -29,10 +29,13 @@ export default async function CampaignDetail({
   const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, id));
   if (!campaign) notFound();
 
+  const bar = campaign.minScoreToSend ?? 0;
   const [stats] = await db
     .select({
       total: sql<number>`count(*)::int`,
       pending: sql<number>`count(*) filter (where ${contacts.status} = 'pending')::int`,
+      // Pending contacts that actually meet the fit bar — i.e. who "Send" will text.
+      qualifying: sql<number>`count(*) filter (where ${contacts.status} = 'pending' and ${contacts.optedOut} = false and (${bar} = 0 or ${contacts.qualificationScore} >= ${bar}))::int`,
       validating: sql<number>`count(*) filter (where ${contacts.status} = 'validating')::int`,
       sent: sql<number>`count(*) filter (where ${contacts.status} in ('sent','delivered','replied'))::int`,
       delivered: sql<number>`count(*) filter (where ${contacts.status} in ('delivered','replied'))::int`,
@@ -77,6 +80,7 @@ export default async function CampaignDetail({
   const del = deleteCampaign.bind(null, id);
 
   const pending = stats?.pending ?? 0;
+  const qualifying = stats?.qualifying ?? 0;
   const unscored = stats?.unscored ?? 0;
   const total = stats?.total ?? 0;
   const sent = stats?.sent ?? 0;
@@ -165,20 +169,26 @@ export default async function CampaignDetail({
 
         <form action={send}>
           <button
-            disabled={pending === 0 || unscored > 0}
+            disabled={qualifying === 0 || unscored > 0}
             className="inline-flex items-center gap-1.5 rounded-lg bg-sky-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-zinc-300"
             title={
               unscored > 0
                 ? `Scoring ${unscored} contacts — sending is paused until fit scores are ready`
-                : pending === 0
-                  ? "Everyone in this campaign has already been messaged"
-                  : `Texts the ${pending} contacts not yet messaged. Anyone already texted in this campaign is never contacted again.`
+                : qualifying === 0
+                  ? bar > 0
+                    ? `No unsent contacts score ≥ ${bar}. Lower the fit bar on the Contacts page to reach more people.`
+                    : "Everyone in this campaign has already been messaged"
+                  : bar > 0
+                    ? `Texts the ${qualifying} unsent contacts scoring ≥ ${bar}. ${pending - qualifying} other unsent contact${pending - qualifying === 1 ? "" : "s"} fall below the bar and are skipped.`
+                    : `Texts the ${qualifying} contacts not yet messaged. Anyone already texted in this campaign is never contacted again.`
             }
           >
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 12 3.269 3.125A59.769 59.769 0 0 1 21.485 12 59.768 59.768 0 0 1 3.27 20.875L5.999 12Zm0 0h7.5" />
             </svg>
-            {pending > 0 ? `Send to ${pending} unsent` : "Send to unsent"}
+            {qualifying > 0
+              ? `Send to ${qualifying}${bar > 0 ? ` qualified (≥${bar})` : " unsent"}`
+              : "Send to unsent"}
           </button>
         </form>
 
@@ -225,15 +235,16 @@ export default async function CampaignDetail({
         </div>
       ) : null}
 
-      {pending > 0 && unscored === 0 && (stats?.sent ?? 0) > 0 ? (
+      {qualifying > 0 && unscored === 0 && (stats?.sent ?? 0) > 0 ? (
         <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
-          <strong>You&apos;re adding to a campaign that already ran.</strong> &quot;Send to {pending} unsent&quot; texts
-          only the {pending} newly-added contact{pending === 1 ? "" : "s"} — the {stats?.sent} you&apos;ve already
-          messaged are skipped, so nobody is texted twice.
+          <strong>You&apos;re adding to a campaign that already ran.</strong> Send texts only the {qualifying} unsent
+          contact{qualifying === 1 ? "" : "s"}
+          {bar > 0 ? ` scoring ≥ ${bar}` : ""} — the {stats?.sent} you&apos;ve already messaged are skipped, so nobody
+          is texted twice.
         </div>
       ) : null}
 
-      {!sendWindow.ok && pending > 0 ? (
+      {!sendWindow.ok && qualifying > 0 ? (
         <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
           <strong>Outside the send window.</strong> Sends are paused until{" "}
           {sendWindow.openAt.toLocaleString(undefined, {

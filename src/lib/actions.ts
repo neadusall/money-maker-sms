@@ -216,8 +216,8 @@ export async function createCampaign(formData: FormData) {
       fromNumber: str(formData, "fromNumber"),
       salesNavUrl: str(formData, "salesNavUrl"),
       targetRegion: str(formData, "targetRegion"),
-      // Default fit bar: only text candidates scoring >= 65 unless changed.
-      minScoreToSend: 65,
+      // Default fit bar: only text candidates scoring >= 60 unless changed.
+      minScoreToSend: 60,
       sendWindowStart: str(formData, "sendWindowStart") ?? "09:00",
       sendWindowEnd: str(formData, "sendWindowEnd") ?? "19:00",
       scheduledAt,
