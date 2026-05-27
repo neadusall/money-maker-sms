@@ -11,6 +11,7 @@ import {
   messages,
   users,
   suppressedNumbers,
+  scheduledMessages,
   todos,
   type Campaign,
   type Contact,
@@ -141,6 +142,9 @@ async function categorizeUpload(
   for (const r of supp) if (!allow.has(r.phone)) inCampaign.add(r.phone);
 
   const prev = skipPrev ? await previouslyTextedPhones(phones, campaignId) : new Set<string>();
+  // ALWAYS skip numbers that have opted out (replied STOP) anywhere — regardless
+  // of the "skip previously texted" checkbox. Opt-out is permanent.
+  for (const p of await optedOutPhones(phones)) prev.add(p);
   for (const p of allow) prev.delete(p);
 
   // Duplicate detection is purely by TELEPHONE NUMBER, done in-system (string
@@ -191,6 +195,25 @@ async function previouslyTextedPhones(phones: string[], excludeCampaignId: strin
     );
   for (const r of fromSuppression) result.add(r.phone);
   for (const r of fromContacts) result.add(r.phone);
+  return result;
+}
+
+/** Phones (from the given list) that have opted out (replied STOP) — globally,
+ *  across every campaign. These must never be texted again. */
+async function optedOutPhones(phones: string[]): Promise<Set<string>> {
+  const result = new Set<string>();
+  const uniq = Array.from(new Set(phones));
+  if (uniq.length === 0) return result;
+  const optedContacts = await db
+    .select({ phone: contacts.phone })
+    .from(contacts)
+    .where(and(inArray(contacts.phone, uniq), eq(contacts.optedOut, true)));
+  const optedSupp = await db
+    .select({ phone: suppressedNumbers.phone })
+    .from(suppressedNumbers)
+    .where(and(inArray(suppressedNumbers.phone, uniq), eq(suppressedNumbers.reason, "opted_out")));
+  for (const r of optedContacts) result.add(r.phone);
+  for (const r of optedSupp) result.add(r.phone);
   return result;
 }
 
@@ -500,6 +523,17 @@ export async function sendCampaignBatch(campaignId: string): Promise<void> {
   let skipped = 0;
 
   for (const contact of pending) {
+    // Atomically claim (pending->queued) so concurrent passes can't double-send.
+    const claimed = await db
+      .update(contacts)
+      .set({ status: "queued" })
+      .where(and(eq(contacts.id, contact.id), eq(contacts.status, "pending")))
+      .returning({ id: contacts.id });
+    if (claimed.length === 0) {
+      skipped++;
+      continue;
+    }
+
     const body = renderTemplate(campaign.smsTemplate, contact);
     const missing = findUnmergedTokens(campaign.smsTemplate, contact);
     if (missing.length > 0) {
@@ -614,6 +648,22 @@ export async function recordInbound(args: {
     return { matched: false };
   }
 
+  // Idempotency: Telnyx can re-deliver the same inbound webhook (retries). If we've
+  // already stored this message id, skip — otherwise we'd classify + auto-reply
+  // twice, which looks automated. (This is why a candidate occasionally saw two
+  // replies.)
+  if (args.telnyxId) {
+    const [dup] = await db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(eq(messages.telnyxId, args.telnyxId))
+      .limit(1);
+    if (dup) {
+      console.warn(`[recordInbound] duplicate webhook for telnyxId ${args.telnyxId}; skipping`);
+      return { matched: true };
+    }
+  }
+
   const matches = await db
     .select({ contact: contacts, campaign: campaigns })
     .from(contacts)
@@ -641,10 +691,17 @@ export async function recordInbound(args: {
         telnyxId: args.telnyxId ?? null,
         classification: "stop",
       });
+    // Permanent global do-not-text: opt out EVERY contact row with this number
+    // (across all campaigns), so no current or future campaign can message it.
     await db
       .update(contacts)
       .set({ optedOut: true, status: "opted_out" })
-      .where(eq(contacts.id, contact.id));
+      .where(eq(contacts.phone, e164));
+    // Record on the suppression list too, so future CSV uploads skip it on sight.
+    await db
+      .insert(suppressedNumbers)
+      .values({ campaignId: campaign.id, phone: e164, reason: "opted_out" })
+      .onConflictDoNothing({ target: [suppressedNumbers.campaignId, suppressedNumbers.phone] });
     await db
       .update(conversations)
       .set({
@@ -865,7 +922,17 @@ async function classifyInboundSilent(args: {
         .where(eq(messages.conversationId, args.conversationId));
       const isFirstResponse = (stats?.outboundCount ?? 0) <= 1;
 
-      if (isQStashConfigured()) {
+      // Guard against sending two replies: if an auto-reply is already queued for
+      // this conversation (e.g. a rapid/duplicate inbound), don't queue another.
+      const [queuedReply] = await db
+        .select({ id: scheduledMessages.id })
+        .from(scheduledMessages)
+        .where(and(eq(scheduledMessages.conversationId, args.conversationId), eq(scheduledMessages.status, "pending")))
+        .limit(1);
+
+      if (queuedReply) {
+        console.log(`[semi_auto] auto-reply already queued for convo ${args.conversationId}; skipping duplicate`);
+      } else if (isQStashConfigured()) {
         // Human-like delay: schedule the send for 3-5 min (first reply) / 2-6 min (after).
         const delay = replyDelaySeconds(isFirstResponse);
         await scheduleReply({ conversationId: args.conversationId, body: draft, delaySeconds: delay });

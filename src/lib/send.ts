@@ -29,6 +29,17 @@ export async function processContactSend(
   campaign: Campaign,
   contact: Contact,
 ): Promise<"sent" | "failed" | "skipped"> {
+  // Atomically CLAIM this contact before doing anything else: flip pending->queued
+  // only if it's still pending. If another concurrent pass already claimed it,
+  // this returns 0 rows and we skip — so a contact can never be sent twice even
+  // if the drain runs in parallel or Send is clicked multiple times.
+  const claimed = await db
+    .update(contacts)
+    .set({ status: "queued" })
+    .where(and(eq(contacts.id, contact.id), eq(contacts.status, "pending")))
+    .returning({ id: contacts.id });
+  if (claimed.length === 0) return "skipped";
+
   const body = renderTemplate(campaign.smsTemplate, contact);
   const missing = findUnmergedTokens(campaign.smsTemplate, contact);
   if (missing.length > 0) {
