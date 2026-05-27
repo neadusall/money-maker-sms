@@ -87,6 +87,9 @@ export default async function CampaignDetail({
   const replyRate = pct(replied, delivered);
   const positiveRate = pct(positive, classified);
   const sendWindow = isWithinSendWindow(campaign.sendWindowStart, campaign.sendWindowEnd);
+  const appTz = process.env.APP_TIMEZONE ?? "America/New_York";
+  const scheduledFuture =
+    campaign.scheduledAt && campaign.scheduledAt.getTime() > Date.now() ? campaign.scheduledAt : null;
 
   return (
     <section className="grid gap-6">
@@ -183,6 +186,30 @@ export default async function CampaignDetail({
           <DeleteCampaignButton deleteAction={del} />
         </div>
       </div>
+
+      {scheduledFuture ? (
+        <div className="flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-900">
+          <svg className="h-4 w-4 shrink-0 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+          </svg>
+          <span>
+            <strong>
+              Scheduled to start{" "}
+              {scheduledFuture.toLocaleString("en-US", {
+                timeZone: appTz,
+                weekday: "short",
+                month: "short",
+                day: "numeric",
+                hour: "numeric",
+                minute: "2-digit",
+              })}{" "}
+              ({appTz}).
+            </strong>{" "}
+            Sending begins automatically then (within the send window), once fit scoring is complete. Clear the schedule
+            field below and save to cancel, or use the Send button to start now.
+          </span>
+        </div>
+      ) : null}
 
       {unscored > 0 ? (
         <div className="flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 p-4 text-sm text-violet-900">

@@ -33,7 +33,7 @@ import { isStopKeyword } from "./opt-out";
 import { classifyReply, isAutoSendCandidate, isAutoIgnoreNegative } from "./classify";
 import { draftReply } from "./draft-reply";
 import { paceForNextSend } from "./pacing";
-import { isWithinSendWindow } from "./send-window";
+import { isWithinSendWindow, parseScheduleInTz } from "./send-window";
 import {
   replyDelaySeconds,
   isQStashConfigured,
@@ -58,6 +58,30 @@ function str(formData: FormData, key: string): string | null {
   if (typeof v !== "string") return null;
   const trimmed = v.trim();
   return trimmed === "" ? null : trimmed;
+}
+
+// Parse the optional "Schedule send" datetime-local field. The browser sends a
+// naive wall-clock string ("YYYY-MM-DDTHH:mm"); interpret it in APP_TIMEZONE.
+// Returns null when blank (no schedule) so the column clears.
+function parseScheduledAt(formData: FormData): Date | null {
+  const raw = str(formData, "scheduledAt");
+  if (!raw) return null;
+  return parseScheduleInTz(raw);
+}
+
+/**
+ * If a campaign has a future schedule and QStash is available, arm it: mark it
+ * active and kick off the drain, which then bounces (waiting on the schedule, the
+ * send window, and fit scoring) until the scheduled moment and sends. No-op when
+ * the schedule is blank/past or QStash isn't configured — the user launches
+ * manually with the Launch button in that case.
+ */
+async function maybeArmSchedule(campaignId: string, scheduledAt: Date | null): Promise<void> {
+  if (!scheduledAt || scheduledAt.getTime() <= Date.now()) return;
+  if (!isQStashConfigured()) return;
+  await db.update(campaigns).set({ status: "active", updatedAt: new Date() }).where(eq(campaigns.id, campaignId));
+  const secs = Math.min(6 * 3600, Math.max(60, Math.ceil((scheduledAt.getTime() - Date.now()) / 1000)));
+  await enqueueCampaignDrain(campaignId, secs);
 }
 
 /**
@@ -177,6 +201,7 @@ export async function createCampaign(formData: FormData) {
     throw new Error("Campaign name and SMS template are required");
   }
   const llmModeValue = (str(formData, "llmMode") ?? "draft_only") as LlmMode;
+  const scheduledAt = parseScheduledAt(formData);
 
   const [created] = await db
     .insert(campaigns)
@@ -193,6 +218,7 @@ export async function createCampaign(formData: FormData) {
       targetRegion: str(formData, "targetRegion"),
       sendWindowStart: str(formData, "sendWindowStart") ?? "09:00",
       sendWindowEnd: str(formData, "sendWindowEnd") ?? "19:00",
+      scheduledAt,
     })
     .returning();
 
@@ -252,6 +278,8 @@ export async function createCampaign(formData: FormData) {
     summary = { added: toInsert.length, prev: prevSkipped, dup: dupSkipped, region: outOfRegion };
   }
 
+  await maybeArmSchedule(created.id, scheduledAt);
+
   revalidatePath("/");
   if (summary) {
     redirect(
@@ -288,6 +316,7 @@ export async function removeProfileImage() {
 }
 
 export async function updateCampaign(campaignId: string, formData: FormData) {
+  const scheduledAt = parseScheduledAt(formData);
   await db
     .update(campaigns)
     .set({
@@ -303,9 +332,12 @@ export async function updateCampaign(campaignId: string, formData: FormData) {
       targetRegion: str(formData, "targetRegion"),
       sendWindowStart: str(formData, "sendWindowStart") ?? undefined,
       sendWindowEnd: str(formData, "sendWindowEnd") ?? undefined,
+      scheduledAt,
       updatedAt: new Date(),
     })
     .where(eq(campaigns.id, campaignId));
+
+  await maybeArmSchedule(campaignId, scheduledAt);
 
   revalidatePath(`/campaigns/${campaignId}`);
 }

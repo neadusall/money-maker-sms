@@ -17,6 +17,28 @@ function nowInTimezone(tz: string): Date {
   return new Date(new Date().toLocaleString("en-US", { timeZone: tz }));
 }
 
+/**
+ * Interpret a wall-clock datetime-local string ("YYYY-MM-DDTHH:mm", no zone)
+ * as a moment in the given IANA timezone, returning the corresponding UTC Date.
+ * Used for campaign schedules so "2:00 PM" means 2 PM in APP_TIMEZONE no matter
+ * where the server runs (Hetzner is UTC).
+ */
+export function parseScheduleInTz(
+  value: string,
+  tz: string = process.env.APP_TIMEZONE ?? "America/New_York",
+): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value.trim());
+  if (!m) return null;
+  // Treat the naive wall-clock as if it were UTC, then correct by the tz offset
+  // at that instant so the stored instant maps back to the intended wall time.
+  const asUtc = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
+  const d = new Date(asUtc);
+  const tzWall = new Date(d.toLocaleString("en-US", { timeZone: tz })).getTime();
+  const utcWall = new Date(d.toLocaleString("en-US", { timeZone: "UTC" })).getTime();
+  const offset = tzWall - utcWall;
+  return new Date(asUtc - offset);
+}
+
 export function isWithinSendWindow(
   startHHMM: string,
   endHHMM: string,

@@ -15,6 +15,22 @@ export type SendResult =
   | { ok: true; telnyxId: string }
   | { ok: false; error: string };
 
+const OPT_OUT_LINE = "Reply STOP to opt out.";
+
+/**
+ * 10DLC compliance: every outbound message must carry opt-out language.
+ * Appended here at the single send chokepoint so no path can skip it.
+ * Idempotent — if the body already mentions opting out with STOP, leave it.
+ */
+export function withOptOut(body: string): string {
+  const text = body.trimEnd();
+  // Already carries opt-out language ("STOP ... opt out / opt-out / optout")? Leave it.
+  if (/\bstop\b[\s\S]*?opt[\s-]?out/i.test(text)) {
+    return text;
+  }
+  return `${text}\n\n${OPT_OUT_LINE}`;
+}
+
 export async function sendSms(args: {
   to: string;
   body: string;
@@ -28,7 +44,7 @@ export async function sendSms(args: {
   try {
     const res = await client().messages.send({
       to: args.to,
-      text: args.body,
+      text: withOptOut(args.body),
       ...(from ? { from } : {}),
       ...(profileId ? { messaging_profile_id: profileId } : {}),
     });

@@ -5,6 +5,39 @@ type Action = (formData: FormData) => Promise<void>;
 
 const SAMPLE_TEMPLATE = `Hi {first_name}, reaching out about an opportunity that looks aligned with your background. Open to a quick chat?`;
 
+const APP_TZ = process.env.APP_TIMEZONE ?? "America/New_York";
+
+function hourLabel(h: number): string {
+  if (h === 0) return "12:00 AM (midnight)";
+  if (h === 12) return "12:00 PM (noon)";
+  return h < 12 ? `${h}:00 AM` : `${h - 12}:00 PM`;
+}
+
+// 12 AM … 11 PM, value "HH:00". `endOfDay` adds a final "midnight / end of day" option.
+function hourOptions(endOfDay = false): { value: string; label: string }[] {
+  const opts = Array.from({ length: 24 }, (_, h) => ({
+    value: `${String(h).padStart(2, "0")}:00`,
+    label: hourLabel(h),
+  }));
+  if (endOfDay) opts.push({ value: "24:00", label: "Midnight (end of day)" });
+  return opts;
+}
+
+// Format a stored Date as a datetime-local value ("YYYY-MM-DDTHH:mm") in APP_TZ.
+function toLocalInput(d: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
+}
+
 export function CampaignForm({
   action,
   className,
@@ -50,20 +83,30 @@ export function CampaignForm({
           help="Leave blank to use TELNYX_FROM_NUMBER or messaging profile pool."
         />
         <Row>
-          <Field
-            label="Send window start (HH:MM, your TZ)"
+          <Select
+            label={`Send window start (${APP_TZ})`}
             name="sendWindowStart"
-            placeholder="09:00"
             defaultValue={campaign?.sendWindowStart ?? "09:00"}
-            help="Sends outside this window are skipped. Set APP_TIMEZONE env var to your IANA TZ."
+            options={hourOptions()}
           />
-          <Field
-            label="Send window end (HH:MM, your TZ)"
+          <Select
+            label={`Send window end (${APP_TZ})`}
             name="sendWindowEnd"
-            placeholder="19:00"
             defaultValue={campaign?.sendWindowEnd ?? "19:00"}
+            options={hourOptions(true)}
           />
         </Row>
+        <p className="-mt-2 text-xs text-zinc-500">
+          Texts only go out between these hours. Outside the window, sends pause and resume automatically when it
+          reopens.
+        </p>
+        <Field
+          label="Schedule send (optional)"
+          name="scheduledAt"
+          type="datetime-local"
+          defaultValue={campaign?.scheduledAt ? toLocalInput(campaign.scheduledAt) : ""}
+          help={`Pick a date and time (${APP_TZ}) to start this campaign automatically. Leave blank to start it yourself with the Launch button. Sending still respects the send window above.`}
+        />
         <Field
           label="LinkedIn Sales Navigator search link (optional)"
           name="salesNavUrl"
@@ -185,6 +228,7 @@ function Field({
   placeholder,
   required,
   help,
+  type,
 }: {
   label: string;
   name: string;
@@ -192,6 +236,7 @@ function Field({
   placeholder?: string;
   required?: boolean;
   help?: string;
+  type?: string;
 }) {
   return (
     <label className="block">
@@ -201,6 +246,7 @@ function Field({
       </span>
       <input
         name={name}
+        type={type}
         defaultValue={defaultValue}
         placeholder={placeholder}
         required={required}

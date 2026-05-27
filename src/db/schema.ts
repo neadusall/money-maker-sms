@@ -135,6 +135,11 @@ export const campaigns = pgTable("campaigns", {
   sendWindowStart: text("send_window_start").default("09:00").notNull(),
   sendWindowEnd: text("send_window_end").default("19:00").notNull(),
 
+  // Optional one-time schedule: when set + in the future, the campaign's first
+  // send is deferred until this moment (interpreted in APP_TIMEZONE wall-clock).
+  // Cleared once the scheduled drain has been kicked off.
+  scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
+
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),

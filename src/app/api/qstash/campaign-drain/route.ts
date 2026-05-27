@@ -39,6 +39,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, note: `campaign ${campaign.status}; stopped` });
   }
 
+  // Honor a one-time schedule: wait until the scheduled moment, then clear it so
+  // this gate stops firing and sending proceeds.
+  if (campaign.scheduledAt && campaign.scheduledAt.getTime() > Date.now()) {
+    const secs = Math.min(6 * 3600, Math.max(60, Math.ceil((campaign.scheduledAt.getTime() - Date.now()) / 1000)));
+    await enqueueCampaignDrain(campaignId, secs);
+    return NextResponse.json({ ok: true, note: "scheduled for future; re-enqueued", retryInSeconds: secs });
+  }
+  if (campaign.scheduledAt) {
+    await db.update(campaigns).set({ scheduledAt: null }).where(eq(campaigns.id, campaignId));
+  }
+
   // Respect the send window — if we're outside it, re-enqueue for when it opens.
   const window = isWithinSendWindow(campaign.sendWindowStart, campaign.sendWindowEnd);
   if (!window.ok) {
@@ -49,6 +60,27 @@ export async function POST(request: Request) {
 
   // Only text contacts meeting the campaign's minimum fit score (if set).
   const minScore = campaign.minScoreToSend;
+
+  // Score-first: when no fit threshold is set, never text contacts that haven't
+  // been scored yet — wait for background scoring to finish first. (With a
+  // threshold set, unscored contacts are already excluded by the query below.)
+  if (!minScore) {
+    const [{ unscored }] = await db
+      .select({ unscored: sql<number>`count(*)::int` })
+      .from(contacts)
+      .where(
+        and(
+          eq(contacts.campaignId, campaignId),
+          eq(contacts.status, "pending"),
+          eq(contacts.optedOut, false),
+          sql`${contacts.qualificationScore} is null`,
+        ),
+      );
+    if (unscored > 0) {
+      await enqueueCampaignDrain(campaignId, 30);
+      return NextResponse.json({ ok: true, note: "waiting for fit scoring", unscored });
+    }
+  }
   const sendable = and(
     eq(contacts.campaignId, campaignId),
     eq(contacts.status, "pending"),
