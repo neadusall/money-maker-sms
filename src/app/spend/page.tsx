@@ -12,6 +12,7 @@ const SMS_IN = Number(process.env.SMS_IN_COST ?? "0.001");
 const PROFILE_COST = Number(process.env.RAPIDAPI_PROFILE_COST ?? "0.00267");
 const HETZNER_MO = Number(process.env.HETZNER_MONTHLY ?? "8");
 const RAPIDAPI_MO = Number(process.env.RAPIDAPI_MONTHLY ?? "40");
+const TZ = process.env.APP_TIMEZONE ?? "America/Chicago";
 
 function usd(n: number): string {
   return "$" + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -47,6 +48,23 @@ export default async function SpendPage() {
            count(*) FILTER (WHERE enriched_profile IS NOT NULL AND enriched_at >= date_trunc('month', now()))::int enriched_m
     FROM contacts`);
 
+  // Per-day spend (in the app timezone) across all three usage sources, last 14 days.
+  const daily = await many(sql`
+    SELECT to_char(day, 'YYYY-MM-DD') AS day,
+           coalesce(sum(cost),0)::float AS total,
+           coalesce(sum(cost) FILTER (WHERE src='llm'),0)::float AS llm,
+           coalesce(sum(cost) FILTER (WHERE src='sms'),0)::float AS sms,
+           coalesce(sum(cost) FILTER (WHERE src='li'),0)::float AS li
+    FROM (
+      SELECT (created_at AT TIME ZONE ${TZ})::date AS day, cost_usd::float AS cost, 'llm' AS src FROM usage_events
+      UNION ALL
+      SELECT (created_at AT TIME ZONE ${TZ})::date, (CASE WHEN direction='outbound' THEN ${SMS_OUT}::float ELSE ${SMS_IN}::float END), 'sms' FROM messages
+      UNION ALL
+      SELECT (enriched_at AT TIME ZONE ${TZ})::date, ${PROFILE_COST}::float, 'li' FROM contacts WHERE enriched_profile IS NOT NULL AND enriched_at IS NOT NULL
+    ) t
+    WHERE day >= (now() AT TIME ZONE ${TZ})::date - 13
+    GROUP BY day ORDER BY day DESC`);
+
   const outb = Number(msg.outb ?? 0), inb = Number(msg.inb ?? 0), outbM = Number(msg.outb_m ?? 0), inbM = Number(msg.inb_m ?? 0);
   const enriched = Number(li.enriched ?? 0), enrichedM = Number(li.enriched_m ?? 0);
   const llmTotal = Number(llm.total ?? 0), llmMonth = Number(llm.mtd ?? 0);
@@ -59,6 +77,20 @@ export default async function SpendPage() {
   const monthVariable = smsCostM + llmMonth + liCostM;
   const monthTotal = monthVariable + HETZNER_MO + RAPIDAPI_MO;
   const allVariable = smsCost + llmTotal + liCost;
+
+  // Today's spend (app timezone) pulled from the daily series.
+  const todayStr = new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(new Date());
+  const todayRow = daily.find((d) => String(d.day) === todayStr);
+  const todayTotal = Number(todayRow?.total ?? 0);
+  const todayLlm = Number(todayRow?.llm ?? 0);
+  const maxDay = Math.max(0.01, ...daily.map((d) => Number(d.total)));
+
+  // What's driving spend: largest LLM purpose + per-contact scoring rate.
+  const scoreRow = byPurpose.find((p) => String(p.purpose) === "score");
+  const scoreCost = Number(scoreRow?.c ?? 0);
+  const scoreCalls = Number(scoreRow?.n ?? 0);
+  const perScore = scoreCalls > 0 ? scoreCost / scoreCalls : 0;
+  const topPurpose = byPurpose[0];
 
   const purposeLabel: Record<string, string> = {
     score: "Candidate scoring",
@@ -81,23 +113,80 @@ export default async function SpendPage() {
         </div>
       </div>
 
-      {/* This-month headline */}
+      {/* Headline: running total, today, this month */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <KpiCard label="This month — total" value={usd(monthTotal)} accent="zinc" hint="usage + fixed costs" />
-        <KpiCard label="Telnyx SMS" value={usd(smsCostM)} accent="sky" chip={`${outbM} sent`} hint={`${inbM} received`} />
-        <KpiCard label="LLM (Anthropic)" value={usd(llmMonth)} accent="violet" chip={`${Number(llm.calls ?? 0)} calls`} hint="classify · draft · score" />
-        <KpiCard label="LinkedIn profiles" value={usd(liCostM)} accent="emerald" chip={`${enrichedM} pulled`} />
+        <KpiCard label="Running total (all-time)" value={usd(allVariable)} accent="zinc" hint="usage across all services" />
+        <KpiCard label="Today" value={usd(todayTotal)} accent="amber" chip={`${usd(todayLlm)} LLM`} hint={`since midnight ${TZ}`} />
+        <KpiCard label="This month" value={usd(monthTotal)} accent="sky" hint="usage + fixed costs" />
+        <KpiCard label="LLM (Anthropic)" value={usd(llmTotal)} accent="violet" chip={`${Number(llm.calls ?? 0)} calls`} hint="all-time — scoring + replies" />
       </div>
 
       <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
-        <MiniStat label="Hetzner (mo)" value={usd(HETZNER_MO)} />
-        <MiniStat label="RapidAPI plan (mo)" value={usd(RAPIDAPI_MO)} />
+        <MiniStat label="Telnyx SMS (all)" value={usd(smsCost)} accent="sky" />
+        <MiniStat label="LinkedIn (all)" value={usd(liCost)} accent="emerald" />
         <MiniStat label="Usage this mo" value={usd(monthVariable)} accent="amber" />
-        <MiniStat label="All-time usage" value={usd(allVariable)} />
+        <MiniStat label="Hetzner + RapidAPI (mo)" value={usd(HETZNER_MO + RAPIDAPI_MO)} />
         <MiniStat label="LLM tokens" value={Number(llm.tokens ?? 0).toLocaleString()} />
       </div>
 
-      {/* Breakdown */}
+      {/* What's driving the spend */}
+      <div className="rounded-2xl border border-violet-200 bg-violet-50 p-5">
+        <h3 className="text-sm font-semibold text-violet-900">What&apos;s driving your spend</h3>
+        <p className="mt-1.5 text-sm text-violet-900/90">
+          The biggest cost is <strong>{purposeLabel[String(topPurpose?.purpose)] ?? "candidate scoring"}</strong>. Every
+          contact you upload is scored once by Claude against the job description{" "}
+          {perScore > 0 ? (
+            <>
+              — about <strong>{usd(perScore)}</strong> per candidate ({scoreCalls.toLocaleString()} scored so far ={" "}
+              {usd(scoreCost)}).
+            </>
+          ) : (
+            <>(charged per candidate scored).</>
+          )}{" "}
+          Reply <em>classification</em> and <em>drafting</em> add a small cost each time a candidate texts back, and a
+          one-time <em>rubric</em> is generated per campaign. SMS is billed per message through Telnyx; LinkedIn
+          enrichment is billed per profile pulled through RapidAPI.
+        </p>
+        <p className="mt-2 text-xs text-violet-800/80">
+          LLM spend is metered from real token usage on every call, so this updates the moment scoring or a reply runs.
+          Scoring a large new list is the main thing that moves this number — and what can exhaust your Anthropic credit
+          balance if it isn&apos;t topped up.
+        </p>
+      </div>
+
+      {/* Daily spend, last 14 days */}
+      <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+        <div className="flex items-baseline justify-between">
+          <h3 className="text-sm font-semibold text-zinc-700">Daily spend</h3>
+          <span className="text-[10px] uppercase tracking-wide text-zinc-400">last 14 days · {TZ}</span>
+        </div>
+        <div className="mt-3 space-y-1.5">
+          {daily.length === 0 ? (
+            <div className="text-xs text-zinc-400">No usage recorded yet.</div>
+          ) : (
+            daily.map((d) => {
+              const total = Number(d.total);
+              const w = `${Math.max(2, (total / maxDay) * 100)}%`;
+              const isToday = String(d.day) === todayStr;
+              return (
+                <div key={String(d.day)} className="flex items-center gap-3 text-sm">
+                  <span className={"w-28 shrink-0 tabular-nums " + (isToday ? "font-semibold text-zinc-900" : "text-zinc-500")}>
+                    {new Date(String(d.day) + "T12:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
+                    {isToday ? " ·today" : ""}
+                  </span>
+                  <div className="relative h-4 flex-1 overflow-hidden rounded bg-zinc-100">
+                    <div className="absolute inset-y-0 left-0 rounded bg-violet-500/80" style={{ width: w }} />
+                  </div>
+                  <span className="w-20 shrink-0 text-right tabular-nums font-medium text-zinc-900">{usd(total)}</span>
+                </div>
+              );
+            })
+          )}
+        </div>
+        <p className="mt-3 text-[11px] text-zinc-400">Bars show total daily spend (LLM + SMS + LinkedIn). Newest at top.</p>
+      </div>
+
+      {/* Breakdown by service */}
       <div className="grid gap-3 lg:grid-cols-3">
         <Panel title="Telnyx — SMS" total={usd(smsCost)} sub="all-time">
           <Line label={`Outbound (${outb})`} detail={`@ ${usd(SMS_OUT)}/msg`} value={usd(outb * SMS_OUT)} />
