@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { campaigns, contacts, conversations, messages } from "@/db/schema";
 import { ConversationList, type ConversationListItem } from "@/components/ConversationList";
@@ -47,8 +47,9 @@ export default async function InboxLayout({
     )
     // Show EVERY thread in this campaign — including the ones you've texted that
     // haven't replied yet — so "All" reflects all outbound communication, not
-    // just repliers. The filter chips (Needs attention / Active / etc.) narrow it.
-    .where(eq(conversations.campaignId, id))
+    // just repliers. Archived (soft-deleted) contacts are hidden here and live in
+    // the campaign's Archived view. The filter chips narrow further.
+    .where(and(eq(conversations.campaignId, id), isNull(contacts.deletedAt)))
     .orderBy(desc(conversations.lastMessageAt))
     .limit(5000);
 

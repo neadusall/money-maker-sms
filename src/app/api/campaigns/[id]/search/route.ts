@@ -35,6 +35,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
       ORDER BY m.created_at DESC LIMIT 1
     ) mm ON true
     WHERE cv.campaign_id = ${id}
+      AND ct.deleted_at IS NULL
       AND (mm.body IS NOT NULL
            OR ct.first_name ILIKE ${like} OR ct.last_name ILIKE ${like}
            OR ct.company ILIKE ${like} OR ct.phone ILIKE ${like})

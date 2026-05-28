@@ -201,6 +201,10 @@ export const contacts = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+
+    // Soft-delete marker: "delete" actions now set this instead of erasing the
+    // row, so the Archived view per campaign can list/search/restore them.
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
   (t) => ({
     campaignPhoneIdx: unique("contacts_campaign_phone_unique").on(

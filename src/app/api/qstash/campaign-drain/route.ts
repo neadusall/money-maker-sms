@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { campaigns, contacts } from "@/db/schema";
 import { processContactSend } from "@/lib/send";
@@ -85,6 +85,7 @@ export async function POST(request: Request) {
     eq(contacts.campaignId, campaignId),
     eq(contacts.status, "pending"),
     eq(contacts.optedOut, false),
+    isNull(contacts.deletedAt),
     minScore ? sql`${contacts.qualificationScore} >= ${minScore}` : undefined,
   );
 

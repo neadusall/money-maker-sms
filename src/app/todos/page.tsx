@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "@/db/client";
 import { todos, contacts, campaigns, type TodoChannel } from "@/db/schema";
 import { completeTodo, reopenTodo, deleteTodo, toggleCandidateReviewed } from "@/lib/actions";
@@ -63,7 +63,7 @@ export default async function TodosPage({
     .from(todos)
     .innerJoin(contacts, eq(contacts.id, todos.contactId))
     .innerJoin(campaigns, eq(campaigns.id, todos.campaignId))
-    .where(channel ? eq(todos.channel, channel as TodoChannel) : undefined)
+    .where(and(isNull(contacts.deletedAt), channel ? eq(todos.channel, channel as TodoChannel) : undefined))
     .orderBy(desc(todos.createdAt))
     .limit(1000);
 

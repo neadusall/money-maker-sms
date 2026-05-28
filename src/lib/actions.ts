@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { and, eq, ne, desc, sql, inArray } from "drizzle-orm";
+import { and, eq, isNull, ne, desc, sql, inArray } from "drizzle-orm";
 import { db } from "@/db/client";
 import {
   campaigns,
@@ -430,10 +430,16 @@ export async function validateExistingContacts(campaignId: string): Promise<void
 }
 
 export async function deleteContact(campaignId: string, contactId: string) {
-  await db.delete(contacts).where(and(eq(contacts.id, contactId), eq(contacts.campaignId, campaignId)));
+  // Soft-delete: keep the row + conversation/messages, just mark archived so
+  // the Archived view can list/search/restore them.
+  await db
+    .update(contacts)
+    .set({ deletedAt: new Date() })
+    .where(and(eq(contacts.id, contactId), eq(contacts.campaignId, campaignId)));
   revalidatePath("/");
   revalidatePath(`/campaigns/${campaignId}/contacts`);
   revalidatePath(`/campaigns/${campaignId}`);
+  revalidatePath(`/campaigns/${campaignId}/archived`);
 }
 
 export async function deleteAllContacts(campaignId: string): Promise<void> {
@@ -478,10 +484,11 @@ export async function deleteConversation(formData: FormData): Promise<void> {
 
   const [convo] = await db.select().from(conversations).where(eq(conversations.id, conversationId));
   if (convo && convo.campaignId === campaignId) {
-    // Deleting the contact cascades the conversation and its messages.
-    await db.delete(contacts).where(eq(contacts.id, convo.contactId));
+    // Soft-delete: archive the contact so the conversation can be recovered.
+    await db.update(contacts).set({ deletedAt: new Date() }).where(eq(contacts.id, convo.contactId));
   }
 
+  revalidatePath(`/campaigns/${campaignId}/archived`);
   revalidatePath("/");
   revalidatePath(`/campaigns/${campaignId}`);
   revalidatePath(`/campaigns/${campaignId}/inbox`);
@@ -514,6 +521,7 @@ export async function sendCampaignBatch(campaignId: string): Promise<void> {
         eq(contacts.campaignId, campaignId),
         eq(contacts.status, "pending"),
         eq(contacts.optedOut, false),
+        isNull(contacts.deletedAt),
         minScore ? sql`${contacts.qualificationScore} >= ${minScore}` : undefined,
       ),
     )
@@ -1180,12 +1188,26 @@ export async function setMinScore(campaignId: string, formData: FormData): Promi
   revalidatePath(`/campaigns/${campaignId}`);
 }
 
-/** Delete a candidate's entire correspondence (thread, messages, to-dos) from the To-dos tab. */
+/** Archive a candidate's entire correspondence (soft-delete) from the To-dos
+ *  tab. The thread is preserved and can be restored from the campaign's Archived
+ *  view. */
 export async function deleteCorrespondence(contactId: string) {
-  // Deleting the contact cascades its conversation, messages, and to-dos.
-  await db.delete(contacts).where(eq(contacts.id, contactId));
+  const [c] = await db.select({ campaignId: contacts.campaignId }).from(contacts).where(eq(contacts.id, contactId));
+  await db.update(contacts).set({ deletedAt: new Date() }).where(eq(contacts.id, contactId));
   revalidatePath("/todos");
   revalidatePath("/");
+  if (c) revalidatePath(`/campaigns/${c.campaignId}/archived`);
+}
+
+/** Restore a soft-deleted (archived) contact: the thread reappears in the inbox. */
+export async function restoreContact(campaignId: string, contactId: string) {
+  await db
+    .update(contacts)
+    .set({ deletedAt: null })
+    .where(and(eq(contacts.id, contactId), eq(contacts.campaignId, campaignId)));
+  revalidatePath(`/campaigns/${campaignId}/archived`);
+  revalidatePath(`/campaigns/${campaignId}/inbox`);
+  revalidatePath(`/campaigns/${campaignId}`);
 }
 
 /** Toggle the "I've reviewed this candidate" checkmark on the To-dos tab. */

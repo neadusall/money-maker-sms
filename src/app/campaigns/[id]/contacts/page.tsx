@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { and, desc, eq, ne, sql, inArray } from "drizzle-orm";
+import { and, desc, eq, isNull, ne, sql, inArray } from "drizzle-orm";
 import { db } from "@/db/client";
 import { campaigns, contacts, suppressedNumbers } from "@/db/schema";
 import {
@@ -36,10 +36,11 @@ export default async function ContactsPage({
   const minScore = campaign.minScoreToSend ?? 0;
 
   // Show the WHOLE list (the fit bar only decides who gets texted, not who's shown).
+  // Hide soft-deleted/archived — they live in the campaign's Archived view.
   const rows = await db
     .select()
     .from(contacts)
-    .where(eq(contacts.campaignId, id))
+    .where(and(eq(contacts.campaignId, id), isNull(contacts.deletedAt)))
     // Highest fit first; unscored fall to the bottom.
     .orderBy(sql`${contacts.qualificationScore} desc nulls last`, desc(contacts.createdAt))
     .limit(2000);
