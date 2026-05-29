@@ -20,7 +20,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Money Maker SMS",
+  title: "Taltxt",
   description: "SMS outreach engine — campaigns, two-way inbox, and AI reply handling.",
 };
 
