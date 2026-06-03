@@ -12,16 +12,6 @@ export function NavLinks({ todoCount = 0 }: { todoCount?: number }) {
 
   return (
     <div className="flex items-center gap-1 rounded-xl bg-zinc-100 p-1">
-      <a
-        href="https://gtm-os-cyan.vercel.app"
-        className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-violet-600 px-3 py-1.5 text-sm font-semibold text-white shadow-sm transition hover:from-blue-700 hover:to-violet-700"
-        title="Back to the Recruiting GTM OS"
-      >
-        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-        </svg>
-        GTM OS
-      </a>
       <Link href="/" className={pill(onCampaigns)}>
         Campaigns
       </Link>

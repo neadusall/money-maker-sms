@@ -2,10 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
 import { auth } from "@/lib/auth";
-import { signOutAction } from "@/lib/actions";
 import { Logo } from "@/components/Logo";
 import { NavLinks } from "@/components/NavLinks";
-import { UserMenu } from "@/components/UserMenu";
 import { openTodoCount } from "@/lib/todos";
 import "./globals.css";
 
@@ -30,8 +28,6 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   const session = await auth();
-  const email = session?.user?.email ?? "";
-  const image = session?.user?.image ?? null;
   const todoCount = session?.user ? await openTodoCount().catch(() => 0) : 0;
 
   return (
@@ -48,7 +44,6 @@ export default async function RootLayout({
             {session?.user ? (
               <nav className="flex items-center gap-4">
                 <NavLinks todoCount={todoCount} />
-                <UserMenu email={email} image={image} signOutAction={signOutAction} />
               </nav>
             ) : (
               <Link href="/login" className="text-sm text-zinc-600 hover:text-zinc-900">
