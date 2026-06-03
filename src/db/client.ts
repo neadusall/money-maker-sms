@@ -1,5 +1,5 @@
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
 import * as schema from "./schema";
 
 const url = process.env.DATABASE_URL;
@@ -12,4 +12,10 @@ if (!url && process.env.NODE_ENV !== "production") {
 const connectionString =
   url ?? "postgres://placeholder:placeholder@localhost.invalid/placeholder";
 
-export const db = drizzle(neon(connectionString), { schema });
+// Single shared connection pool over the standard Postgres wire protocol, so
+// the app runs against any Postgres — e.g. the self-hosted `db` container in
+// docker-compose. The pool connects lazily (first query), so importing this at
+// build time never opens a connection.
+const pool = new Pool({ connectionString });
+
+export const db = drizzle(pool, { schema });
