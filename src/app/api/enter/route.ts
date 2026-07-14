@@ -55,7 +55,13 @@ export async function GET(req: Request) {
   jar.set(cookieName, sessionToken, {
     httpOnly: true,
     secure,
-    sameSite: "lax",
+    // SameSite=None (+ Partitioned for Chrome's third-party-cookie rules): the
+    // portal embeds this app in an iframe, and on a white-label portal domain
+    // (e.g. app.lumesp.com) that iframe is CROSS-SITE. A Lax cookie is never
+    // sent there, so the SSO sign-in silently fails and users see the email
+    // login form instead. None requires Secure, so keep Lax on plain-http dev.
+    sameSite: secure ? "none" : "lax",
+    ...(secure ? { partitioned: true } : {}),
     path: "/",
     expires,
   });
