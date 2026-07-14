@@ -100,15 +100,15 @@ export default async function ContactsPage({
       {uploadAdded !== null ? (
         <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
           <span className="font-semibold">Upload complete.</span> Added{" "}
-          <strong>{uploadAdded}</strong> new contact{uploadAdded === 1 ? "" : "s"} — ready to send.
+          <strong>{uploadAdded}</strong> new contact{uploadAdded === 1 ? "" : "s"}, ready to send.
           {uploadDup > 0 ? (
             <> {uploadDup} duplicate{uploadDup === 1 ? "" : "s"} removed (already in this campaign).</>
           ) : null}
           {uploadPrev > 0 ? (
-            <> {uploadPrev} skipped — already texted in another campaign.</>
+            <> {uploadPrev} skipped: already texted in another campaign.</>
           ) : null}
           {uploadRegion > 0 ? (
-            <> {uploadRegion} skipped — outside the selected region(s).</>
+            <> {uploadRegion} skipped: outside the selected region(s).</>
           ) : null}
           {uploadPrev > 0 ? (
             <span className="mt-1 block text-xs text-emerald-700">
@@ -163,7 +163,7 @@ export default async function ContactsPage({
             <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" className="opacity-25" />
             <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
           </svg>
-          Validating {validatingCount} number{validatingCount === 1 ? "" : "s"} through Telnyx — landlines are being
+          Validating {validatingCount} number{validatingCount === 1 ? "" : "s"} through Telnyx: landlines are being
           removed. This updates automatically.
         </div>
       ) : sendableCount > 0 ? (
@@ -230,7 +230,7 @@ export default async function ContactsPage({
             <div className="mt-3 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
               Sends go to the <strong>{qualifyCount}</strong> pending contact{qualifyCount === 1 ? "" : "s"} scoring{" "}
               <strong>≥ {minScore}</strong>. Anyone below the bar is skipped (not deleted).
-              {unscoredCount > 0 ? " Scoring is still running — wait for it to finish before sending." : ""}
+              {unscoredCount > 0 ? " Scoring is still running: wait for it to finish before sending." : ""}
             </div>
           ) : null}
         </div>
@@ -292,7 +292,7 @@ export default async function ContactsPage({
                       <div className="flex items-center gap-2">
                         <span>
                           {[c.firstName, c.lastName].filter(Boolean).join(" ") || (
-                            <span className="text-zinc-400">—</span>
+                            <span className="text-zinc-400">-</span>
                           )}
                         </span>
                         {prevTexted.has(c.phone) ? (
@@ -307,13 +307,13 @@ export default async function ContactsPage({
                       </div>
                     </td>
                     <td className="px-3 py-2 font-mono text-xs">{formatPhone(c.phone)}</td>
-                    <td className="px-3 py-2">{c.company ?? <span className="text-zinc-400">—</span>}</td>
-                    <td className="px-3 py-2">{c.jobTitle ?? <span className="text-zinc-400">—</span>}</td>
+                    <td className="px-3 py-2">{c.company ?? <span className="text-zinc-400">-</span>}</td>
+                    <td className="px-3 py-2">{c.jobTitle ?? <span className="text-zinc-400">-</span>}</td>
                     <td className="px-3 py-2">
                       {c.qualificationScore != null ? (
                         <ScoreBadge score={c.qualificationScore} reason={c.qualificationReason} label="" />
                       ) : (
-                        <span className="text-zinc-300">—</span>
+                        <span className="text-zinc-300">-</span>
                       )}
                     </td>
                     <td className="px-3 py-2">

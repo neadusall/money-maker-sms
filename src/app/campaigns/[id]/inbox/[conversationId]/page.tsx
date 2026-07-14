@@ -149,7 +149,7 @@ export default async function ThreadPage({
                 <svg className="h-3.5 w-3.5 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
                 </svg>
-                You&apos;re handling this conversation — AI replies are off for this thread.
+                You&apos;re handling this conversation: AI replies are off for this thread.
               </div>
             ) : null}
             {showDraftButton && generateDraft ? (

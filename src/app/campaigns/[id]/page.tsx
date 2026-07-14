@@ -188,7 +188,7 @@ export default async function CampaignDetail({
             className="inline-flex items-center gap-1.5 rounded-lg bg-sky-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-zinc-300"
             title={
               unscored > 0
-                ? `Scoring ${unscored} contacts — sending is paused until fit scores are ready`
+                ? `Scoring ${unscored} contacts: sending is paused until fit scores are ready`
                 : qualifying === 0
                   ? bar > 0
                     ? `No unsent contacts score ≥ ${bar}. Lower the fit bar on the Contacts page to reach more people.`
@@ -242,7 +242,7 @@ export default async function CampaignDetail({
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
           </svg>
           <span>
-            <strong>Scoring paused — Anthropic credit needs topping up.</strong> {unscored} candidate
+            <strong>Scoring paused: Anthropic credit needs topping up.</strong> {unscored} candidate
             {unscored === 1 ? "" : "s"} can&apos;t be scored because the Anthropic API balance is too low. Add credit at{" "}
             <a href="https://console.anthropic.com/settings/billing" target="_blank" rel="noopener noreferrer" className="font-semibold underline">
               console.anthropic.com → Billing
@@ -259,7 +259,7 @@ export default async function CampaignDetail({
           <span>
             <strong>Scoring {unscored} candidate{unscored === 1 ? "" : "s"} for fit…</strong> Sending is paused until
             everyone has a fit score, so you never text a prospect before they&apos;ve been evaluated. Updates
-            automatically — then set your fit bar on the Contacts page and send only to qualified candidates.
+            automatically, then set your fit bar on the Contacts page and send only to qualified candidates.
           </span>
         </div>
       ) : null}
@@ -268,7 +268,7 @@ export default async function CampaignDetail({
         <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
           <strong>You&apos;re adding to a campaign that already ran.</strong> Send texts only the {qualifying} unsent
           contact{qualifying === 1 ? "" : "s"}
-          {bar > 0 ? ` scoring ≥ ${bar}` : ""} — the {stats?.sent} you&apos;ve already messaged are skipped, so nobody
+          {bar > 0 ? ` scoring ≥ ${bar}` : ""}: the {stats?.sent} you&apos;ve already messaged are skipped, so nobody
           is texted twice.
         </div>
       ) : null}
@@ -319,7 +319,7 @@ export default async function CampaignDetail({
           label="Positive replies"
           value={positive}
           accent="emerald"
-          chip={classified ? `${positiveRate}% of replies` : "—"}
+          chip={classified ? `${positiveRate}% of replies` : "-"}
           hint="interested leads"
           icon={<IconSpark />}
         />

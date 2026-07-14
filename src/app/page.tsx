@@ -172,7 +172,7 @@ export default async function Dashboard() {
               label="Positive replies"
               value={totals.positive}
               accent="emerald"
-              chip={classifiedTotal ? `${pct(totals.positive, classifiedTotal)}% of replies` : "—"}
+              chip={classifiedTotal ? `${pct(totals.positive, classifiedTotal)}% of replies` : "-"}
             />
           </div>
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">

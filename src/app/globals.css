@@ -1,8 +1,15 @@
 @import "tailwindcss";
 
 @theme inline {
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-inter-sans);
+  --font-mono: var(--font-jetbrains-mono);
+}
+
+/* RecruitersOS (Meridian) brand accent: generates bg-brand / text-brand /
+   ring-brand / border-brand utilities. Keep in sync with the portal's --brand. */
+@theme {
+  --color-brand: #2e5bd7;
+  --color-brand-soft: rgba(46, 91, 215, 0.09);
 }
 
 html {
@@ -13,8 +20,8 @@ html {
 }
 
 body {
-  /* Apply the loaded Geist font (previously overridden by Arial). */
-  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  /* Meridian type: Inter, matching the RecruitersOS portal. */
+  font-family: var(--font-inter-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 /* Tabular figures keep stat columns aligned as numbers update live. */

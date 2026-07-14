@@ -49,7 +49,7 @@ export function ProfileImageUploader({
 
   return (
     <div className="flex items-center gap-5">
-      <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-zinc-700 to-zinc-900 text-2xl font-semibold text-white ring-1 ring-zinc-300">
+      <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-zinc-800 text-2xl font-semibold text-white ring-1 ring-zinc-300">
         {image ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={image} alt="Profile" className="h-full w-full object-cover" />

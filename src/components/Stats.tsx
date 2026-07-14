@@ -167,9 +167,9 @@ export function SentimentMeter({
         )}
       </div>
       <div className="mt-4 grid grid-cols-3 gap-2 text-center">
-        <Legend dot="bg-emerald-500" label="Positive" value={positive} sub={total ? `${pct(positive, total)}%` : "—"} />
-        <Legend dot="bg-zinc-300" label="Neutral" value={neutral} sub={total ? `${pct(neutral, total)}%` : "—"} />
-        <Legend dot="bg-rose-500" label="Negative" value={negative} sub={total ? `${pct(negative, total)}%` : "—"} />
+        <Legend dot="bg-emerald-500" label="Positive" value={positive} sub={total ? `${pct(positive, total)}%` : "-"} />
+        <Legend dot="bg-zinc-300" label="Neutral" value={neutral} sub={total ? `${pct(neutral, total)}%` : "-"} />
+        <Legend dot="bg-rose-500" label="Negative" value={negative} sub={total ? `${pct(negative, total)}%` : "-"} />
       </div>
     </div>
   );

@@ -10,7 +10,7 @@ export default function NewCampaignPage() {
       </Link>
       <h1 className="mt-1 text-2xl font-semibold tracking-tight">New campaign</h1>
       <p className="mt-1 text-sm text-zinc-600">
-        Set up the role, write your SMS template, upload your contacts, and you&apos;re ready to send — all in one place.
+        Set up the role, write your SMS template, upload your contacts, and you&apos;re ready to send, all in one place.
       </p>
       <CampaignForm action={createCampaign} className="mt-6" submitLabel="Create campaign" showContactUpload />
     </section>

@@ -25,7 +25,7 @@ export function LinkedInConnectButton({ url, note }: { url: string; note: string
   return (
     <button
       onClick={handleClick}
-      title={`Copies this note and opens their LinkedIn — paste it into the Connect box:\n\n"${note}"`}
+      title={`Copies this note and opens their LinkedIn, paste it into the Connect box:\n\n"${note}"`}
       className={
         "inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium text-white transition " +
         (copied ? "bg-emerald-600" : "bg-blue-600 hover:bg-blue-700")
@@ -36,7 +36,7 @@ export function LinkedInConnectButton({ url, note }: { url: string; note: string
           <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3">
             <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
           </svg>
-          Note copied — paste it
+          Note copied, paste it
         </>
       ) : (
         <>

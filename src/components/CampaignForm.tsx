@@ -74,7 +74,7 @@ export function CampaignForm({
           required
           rows={3}
           defaultValue={campaign?.smsTemplate ?? SAMPLE_TEMPLATE}
-          help="Merge tokens pull from each contact's CSV data: {first_name}, {company}, {job_title}, {location}, or any custom column. Only use a token if every contact has that field — otherwise that contact's send is skipped. For the role you're recruiting for, type it directly (it's the same for everyone), don't use {job_title} (that's the candidate's current title)."
+          help="Merge tokens pull from each contact's CSV data: {first_name}, {company}, {job_title}, {location}, or any custom column. Only use a token if every contact has that field, otherwise that contact's send is skipped. For the role you're recruiting for, type it directly (it's the same for everyone), don't use {job_title} (that's the candidate's current title)."
         />
         <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
           <span className="text-xs font-medium text-zinc-700">Every text automatically ends with:</span>
@@ -85,7 +85,7 @@ export function CampaignForm({
             <span className="text-sm italic text-zinc-600">{OPT_OUT_LINE}</span>
           </div>
           <p className="mt-1.5 text-xs text-zinc-500">
-            Required for compliance — appended to the end of every outbound message (you don&apos;t type it). It won&apos;t
+            Required for compliance: appended to the end of every outbound message (you don&apos;t type it). It won&apos;t
             be added twice if your template already includes it.
           </p>
         </div>
@@ -140,7 +140,7 @@ export function CampaignForm({
       </Card>
 
       {showContactUpload ? (
-        <Card title="Contacts (optional — you can also add them later)">
+        <Card title="Contacts (optional: you can also add them later)">
           <div className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 p-4">
             <label className="block">
               <span className="block text-xs font-medium text-zinc-700">Upload a CSV of contacts</span>
@@ -176,7 +176,7 @@ export function CampaignForm({
               </span>
             </label>
             <p className="mt-2 text-xs text-zinc-500">
-              The whole list uploads — you pick who to text afterward by fit score.{" "}
+              The whole list uploads. You pick who to text afterward by fit score.{" "}
             </p>
             <p className="mt-2 text-xs text-zinc-500">
               Recognized columns: first name, last name, company, job title, <strong>phone (required)</strong>, email,
@@ -187,13 +187,13 @@ export function CampaignForm({
         </Card>
       ) : null}
 
-      <Card title="Position summary — what the AI uses to reply">
+      <Card title="Position summary: what the AI uses to reply">
         <TextArea
           label="Position summary / job description"
           name="positionSummary"
           rows={12}
           defaultValue={campaign?.positionSummary ?? ""}
-          help="Paste the full job description here. This is the only context the AI needs — it reads this to classify candidate replies and to draft responses, pulling out compensation, location, remote status, skills, company info, and selling points as needed."
+          help="Paste the full job description here. This is the only context the AI needs: it reads this to classify candidate replies and to draft responses, pulling out compensation, location, remote status, skills, company info, and selling points as needed."
         />
       </Card>
 

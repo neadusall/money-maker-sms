@@ -46,7 +46,7 @@ function pill(active: boolean): string {
   return (
     "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition " +
     (active
-      ? "bg-white text-emerald-700 shadow-sm ring-1 ring-zinc-200"
+      ? "bg-white text-brand shadow-sm ring-1 ring-zinc-200"
       : "text-zinc-600 hover:text-zinc-900")
   );
 }

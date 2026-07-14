@@ -96,7 +96,7 @@ export default async function TodosPage({
     const li = linkedinLink(r.linkedinUrl, name, r.company, r.jobTitle);
     const first = (r.firstName ?? "").trim() || name.split(" ")[0];
     const recruiter = (r.recruiterName ?? "").trim() || "Ryan";
-    const connectNote = `Hi ${first}, ${recruiter} here — reaching out about a ${r.campaignName} opportunity that looks aligned with your background. Open to connecting?`;
+    const connectNote = `Hi ${first}, ${recruiter} here, reaching out about a ${r.campaignName} opportunity that looks aligned with your background. Open to connecting?`;
     const g =
       groups.get(r.contactId) ??
       {
@@ -199,7 +199,7 @@ export default async function TodosPage({
                 <div className="flex min-w-0 items-start gap-2.5">
                   <form action={toggleCandidateReviewed.bind(null, g.contactId)} className="pt-0.5">
                     <button
-                      title={g.reviewed ? "Read — click to mark unread (stays on the board)" : "Mark as read — keeps them on the board"}
+                      title={g.reviewed ? "Read: click to mark unread (stays on the board)" : "Mark as read: keeps them on the board"}
                       className={
                         "flex h-5 w-5 items-center justify-center rounded-md border transition " +
                         (g.reviewed
@@ -272,7 +272,7 @@ export default async function TodosPage({
                       >
                         <form action={toggle} className="pt-0.5">
                           <button
-                            title={done ? "Done — click to mark not done" : "Mark done (stays on the board)"}
+                            title={done ? "Done: click to mark not done" : "Mark done (stays on the board)"}
                             className={
                               "flex h-5 w-5 items-center justify-center rounded-full border transition " +
                               (done

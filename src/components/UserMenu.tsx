@@ -40,7 +40,7 @@ export function UserMenu({
         title={email}
         aria-haspopup="menu"
         aria-expanded={open}
-        className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-zinc-700 to-zinc-900 text-sm font-semibold text-white ring-1 ring-zinc-300 transition hover:ring-emerald-400"
+        className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-zinc-800 text-sm font-semibold text-white ring-1 ring-zinc-300 transition hover:ring-brand"
       >
         {image ? (
           // eslint-disable-next-line @next/next/no-img-element

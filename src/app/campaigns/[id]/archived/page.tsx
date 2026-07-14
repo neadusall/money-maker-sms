@@ -71,7 +71,7 @@ export default async function ArchivedPage({
         </Link>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight">Archived</h1>
         <p className="mt-1 text-sm text-zinc-600">
-          Deleted threads whose candidates replied — recoverable. Search by name or phone (10-digit).
+          Deleted threads whose candidates replied: recoverable. Search by name or phone (10-digit).
         </p>
       </div>
 
