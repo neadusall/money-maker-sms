@@ -79,7 +79,7 @@ export function KpiCard({
 }) {
   const a = ACCENT[accent];
   return (
-    <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm transition hover:shadow-md">
+    <div className="rounded-2xl border border-zinc-200 bg-surface p-5 shadow-sm transition hover:shadow-md">
       <div className="flex items-start justify-between">
         <div className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">{label}</div>
         {icon ? (
@@ -109,7 +109,7 @@ export function Funnel({
 }) {
   const base = stages[0]?.value || 0;
   return (
-    <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+    <div className="rounded-2xl border border-zinc-200 bg-surface p-5 shadow-sm">
       <h3 className="text-sm font-semibold text-zinc-700">Conversion funnel</h3>
       <div className="mt-4 space-y-3">
         {stages.map((s, i) => {
@@ -152,7 +152,7 @@ export function SentimentMeter({
   const total = positive + neutral + negative;
   const seg = (n: number) => (total ? (n / total) * 100 : 0);
   return (
-    <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+    <div className="rounded-2xl border border-zinc-200 bg-surface p-5 shadow-sm">
       <div className="flex items-baseline justify-between">
         <h3 className="text-sm font-semibold text-zinc-700">Reply sentiment</h3>
         <span className="text-xs text-zinc-400">{total} classified</span>
@@ -200,7 +200,7 @@ export function MiniStat({
 }) {
   const a = ACCENT[accent];
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white px-3 py-3">
+    <div className="rounded-xl border border-zinc-200 bg-surface px-3 py-3">
       <div className={`text-xl font-semibold tabular-nums ${a.value}`}>{value}</div>
       <div className="mt-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-400">{label}</div>
     </div>

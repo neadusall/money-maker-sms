@@ -173,7 +173,7 @@ export default async function TodosPage({
       </div>
 
       {grouped.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-zinc-300 bg-white p-12 text-center">
+        <div className="rounded-2xl border border-dashed border-zinc-300 bg-surface p-12 text-center">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50 text-emerald-500">
             <svg className="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
@@ -190,7 +190,7 @@ export default async function TodosPage({
             <li
               key={i}
               className={
-                "rounded-2xl border bg-white p-5 shadow-sm transition " +
+                "rounded-2xl border bg-surface p-5 shadow-sm transition " +
                 // Read = a green accent only; the card stays fully visible on the board.
                 (g.reviewed ? "border-emerald-300 ring-1 ring-emerald-100" : "border-zinc-200")
               }
@@ -245,7 +245,7 @@ export default async function TodosPage({
                   {g.conversationId ? (
                     <Link
                       href={`/campaigns/${g.campaignId}/inbox/${g.conversationId}`}
-                      className="rounded-lg border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+                      className="rounded-lg border border-zinc-300 bg-surface px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
                     >
                       Open thread →
                     </Link>

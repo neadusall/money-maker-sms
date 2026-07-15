@@ -28,7 +28,7 @@ export function LinkedInConnectButton({ url, note }: { url: string; note: string
       title={`Copies this note and opens their LinkedIn, paste it into the Connect box:\n\n"${note}"`}
       className={
         "inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium text-white transition " +
-        (copied ? "bg-emerald-600" : "bg-blue-600 hover:bg-blue-700")
+        (copied ? "bg-emerald-600" : "bg-blue-600 hover:bg-[#1d4ed8]")
       }
     >
       {copied ? (

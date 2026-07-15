@@ -150,7 +150,7 @@ export default async function ContactsPage({
           <ConfirmButton
             action={clearSuppression}
             confirmLabel="Clear the skip list"
-            className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs text-zinc-600 hover:bg-zinc-50"
+            className="rounded-md border border-zinc-300 bg-surface px-2.5 py-1 text-xs text-zinc-600 hover:bg-zinc-50"
           >
             Clear skip list
           </ConfirmButton>
@@ -167,10 +167,10 @@ export default async function ContactsPage({
           removed. This updates automatically.
         </div>
       ) : sendableCount > 0 ? (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm text-zinc-600">
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-zinc-200 bg-surface px-4 py-2.5 text-sm text-zinc-600">
           <span>Validate existing numbers and drop any landlines before sending.</span>
           <form action={validateNow}>
-            <button className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50">
+            <button className="rounded-md border border-zinc-300 bg-surface px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50">
               Validate numbers now
             </button>
           </form>
@@ -178,7 +178,7 @@ export default async function ContactsPage({
       ) : null}
 
       {totalCount > 0 ? (
-        <div className="rounded-lg border border-zinc-200 bg-white p-5">
+        <div className="rounded-lg border border-zinc-200 bg-surface p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-sm font-semibold text-zinc-900">Candidate fit scoring</h2>
@@ -200,7 +200,7 @@ export default async function ContactsPage({
                 <span className="text-xs text-emerald-600">All {scoredCount} scored</span>
               )}
               <form action={scoreFit}>
-                <button className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50">
+                <button className="rounded-md border border-zinc-300 bg-surface px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50">
                   {unscoredCount > 0 ? "Score now" : "Re-score new"}
                 </button>
               </form>
@@ -236,7 +236,7 @@ export default async function ContactsPage({
         </div>
       ) : null}
 
-      <form action={upload} className="rounded-lg border border-dashed border-zinc-300 bg-white p-5">
+      <form action={upload} className="rounded-lg border border-dashed border-zinc-300 bg-surface p-5">
         <label className="block">
           <span className="block text-sm font-medium">CSV file</span>
           <input
@@ -258,17 +258,17 @@ export default async function ContactsPage({
         <p className="mt-2 text-xs text-zinc-500">
           The entire list uploads and auto-scores. You then pick who to text by fit score.
         </p>
-        <button className="mt-4 rounded-md bg-zinc-900 px-3 py-1.5 text-sm text-white hover:bg-zinc-800">
+        <button className="mt-4 rounded-md bg-ink px-3 py-1.5 text-sm text-white hover:bg-ink-soft">
           Upload contacts
         </button>
       </form>
 
       {rows.length === 0 ? (
-        <div className="rounded-lg border border-zinc-200 bg-white p-6 text-center text-sm text-zinc-500">
+        <div className="rounded-lg border border-zinc-200 bg-surface p-6 text-center text-sm text-zinc-500">
           No contacts yet. Upload a CSV to get started.
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white">
+        <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-surface">
           <table className="min-w-full divide-y divide-zinc-200 text-sm">
             <thead className="bg-zinc-50 text-left text-xs uppercase tracking-wide text-zinc-500">
               <tr>

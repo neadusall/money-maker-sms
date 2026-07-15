@@ -148,7 +148,7 @@ export function CampaignForm({
                 type="file"
                 name="csv"
                 accept=".csv,text/csv"
-                className="mt-2 block w-full text-sm text-zinc-600 file:mr-3 file:rounded-md file:border-0 file:bg-zinc-900 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-zinc-800"
+                className="mt-2 block w-full text-sm text-zinc-600 file:mr-3 file:rounded-md file:border-0 file:bg-ink file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-ink-soft"
               />
             </label>
             <label className="mt-3 flex items-start gap-2 text-xs text-zinc-700">
@@ -213,7 +213,7 @@ export function CampaignForm({
       <div className="flex items-center justify-end gap-3">
         <button
           type="submit"
-          className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800"
+          className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-white hover:bg-ink-soft"
         >
           {submitLabel ?? "Save campaign"}
         </button>
@@ -224,7 +224,7 @@ export function CampaignForm({
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-lg border border-zinc-200 bg-white p-5">
+    <section className="rounded-lg border border-zinc-200 bg-surface p-5">
       <h2 className="text-sm font-semibold text-zinc-900">{title}</h2>
       <div className="mt-4 grid gap-4">{children}</div>
     </section>
@@ -321,7 +321,7 @@ function Select({
       <select
         name={name}
         defaultValue={defaultValue}
-        className="mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500"
+        className="mt-1 w-full rounded-md border border-zinc-300 bg-surface px-3 py-2 text-sm shadow-sm focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500"
       >
         {options.map((o) => (
           <option key={o.value} value={o.value}>

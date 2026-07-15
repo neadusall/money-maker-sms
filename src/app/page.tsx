@@ -126,7 +126,7 @@ export default async function Dashboard() {
         </div>
         <Link
           href="/campaigns/new"
-          className="inline-flex items-center gap-1.5 rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-zinc-800"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-ink px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-ink-soft"
         >
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
@@ -136,7 +136,7 @@ export default async function Dashboard() {
       </div>
 
       {rows.length === 0 ? (
-        <div className="mt-8 rounded-xl border border-dashed border-zinc-300 bg-white p-12 text-center">
+        <div className="mt-8 rounded-xl border border-dashed border-zinc-300 bg-surface p-12 text-center">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-zinc-100 text-zinc-400">
             <svg className="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
               <path strokeLinecap="round" strokeLinejoin="round" d="M8.625 9.75a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H8.25m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H12m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 0 1-2.555-.337A5.972 5.972 0 0 1 5.41 20.97a5.969 5.969 0 0 1-.474-.065 4.48 4.48 0 0 0 .978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25Z" />
@@ -146,7 +146,7 @@ export default async function Dashboard() {
           <p className="mt-1 text-sm text-zinc-600">Upload a list, write a template, and start a conversation.</p>
           <Link
             href="/campaigns/new"
-            className="mt-6 inline-block rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800"
+            className="mt-6 inline-block rounded-lg bg-ink px-4 py-2 text-sm font-medium text-white hover:bg-ink-soft"
           >
             Create your first campaign
           </Link>
@@ -190,7 +190,7 @@ export default async function Dashboard() {
               return (
                 <li
                   key={c.id}
-                  className="group relative flex items-center gap-4 rounded-xl border border-zinc-200 bg-white px-4 py-3 shadow-sm transition hover:border-zinc-300 hover:shadow-md"
+                  className="group relative flex items-center gap-4 rounded-xl border border-zinc-200 bg-surface px-4 py-3 shadow-sm transition hover:border-zinc-300 hover:shadow-md"
                 >
                   {/* Whole-card click target → campaign (inbox/delete sit above it). */}
                   <Link
@@ -205,7 +205,7 @@ export default async function Dashboard() {
                       <Link
                         href={`/campaigns/${c.id}/inbox`}
                         title="Open inbox"
-                        className="pointer-events-auto inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-[11px] font-medium text-zinc-600 hover:bg-zinc-50"
+                        className="pointer-events-auto inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-surface px-2 py-0.5 text-[11px] font-medium text-zinc-600 hover:bg-zinc-50"
                       >
                         <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                           <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 13.5h3.86a2.25 2.25 0 0 1 2.012 1.244l.256.512a2.25 2.25 0 0 0 2.013 1.244h3.218a2.25 2.25 0 0 0 2.013-1.244l.256-.512a2.25 2.25 0 0 1 2.013-1.244h3.859m-19.5.338V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18v-4.162c0-.224-.034-.447-.1-.661L19.24 5.338a2.25 2.25 0 0 0-2.15-1.588H6.911a2.25 2.25 0 0 0-2.15 1.588L2.35 13.177a2.25 2.25 0 0 0-.1.661Z" />

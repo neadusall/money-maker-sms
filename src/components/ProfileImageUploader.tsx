@@ -49,7 +49,7 @@ export function ProfileImageUploader({
 
   return (
     <div className="flex items-center gap-5">
-      <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-zinc-800 text-2xl font-semibold text-white ring-1 ring-zinc-300">
+      <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-ink-soft text-2xl font-semibold text-white ring-1 ring-zinc-300">
         {image ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={image} alt="Profile" className="h-full w-full object-cover" />
@@ -73,7 +73,7 @@ export function ProfileImageUploader({
             type="button"
             disabled={busy}
             onClick={() => inputRef.current?.click()}
-            className="rounded-lg bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+            className="rounded-lg bg-ink px-3 py-1.5 text-sm font-medium text-white hover:bg-ink-soft disabled:opacity-50"
           >
             {busy ? "Saving…" : image ? "Change photo" : "Upload photo"}
           </button>
@@ -82,7 +82,7 @@ export function ProfileImageUploader({
               type="button"
               disabled={busy}
               onClick={onRemove}
-              className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50 disabled:opacity-50"
+              className="rounded-lg border border-zinc-300 bg-surface px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50 disabled:opacity-50"
             >
               Remove
             </button>

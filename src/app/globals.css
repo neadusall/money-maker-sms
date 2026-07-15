@@ -1,15 +1,154 @@
 @import "tailwindcss";
 
+/* ============================================================
+   OS Text · Meridian theme bridge
+   The whole UI is written in stock zinc/status utilities. Instead of
+   restyling every component, the palette itself is retargeted to Meridian
+   design-system tokens, so light AND dark both come from the variable sets
+   below and the markup stays untouched. data-theme is set by the host
+   portal (RecruitersOS or a white-label domain) via the SSO handoff.
+   ============================================================ */
+
 @theme inline {
   --font-sans: var(--font-inter-sans);
   --font-mono: var(--font-jetbrains-mono);
+
+  /* Brand accent (white-label overridable at runtime via --brand). */
+  --color-brand: var(--brand);
+  --color-brand-soft: var(--brand-soft);
+
+  /* Card surface. bg-white was swept to bg-surface so true white stays
+     available for text on solid-color buttons. */
+  --color-surface: var(--t-surface);
+
+  /* Solid dark chips/avatars: stay dark in BOTH themes (bg-zinc-800/900
+     were swept to these so the flipping zinc text scale stays free). */
+  --color-ink: var(--t-ink-solid);
+  --color-ink-soft: var(--t-ink-solid-2);
+
+  /* Neutral scale: flips between Meridian light and dark. */
+  --color-zinc-50: var(--t-bg);
+  --color-zinc-100: var(--t-surface-2);
+  --color-zinc-200: var(--t-border);
+  --color-zinc-300: var(--t-border-strong);
+  --color-zinc-400: var(--t-dim);
+  --color-zinc-500: var(--t-dim-2);
+  --color-zinc-600: var(--t-muted);
+  --color-zinc-700: var(--t-muted-strong);
+  --color-zinc-800: var(--t-ink-2);
+  --color-zinc-900: var(--t-ink);
+
+  /* Status hues. Pastel backgrounds (50/100), soft borders/rings (200/300)
+     and chip text (700/900) flip to translucent dark equivalents; the solid
+     400-600 shades keep their stock values (they read fine on dark). */
+  --color-emerald-50: var(--s-emerald-bg);
+  --color-emerald-100: var(--s-emerald-bg2);
+  --color-emerald-200: var(--s-emerald-line);
+  --color-emerald-300: var(--s-emerald-line2);
+  --color-emerald-700: var(--s-emerald-fg);
+  --color-emerald-900: var(--s-emerald-fg2);
+  --color-rose-50: var(--s-rose-bg);
+  --color-rose-100: var(--s-rose-bg2);
+  --color-rose-200: var(--s-rose-line);
+  --color-rose-300: var(--s-rose-line2);
+  --color-rose-700: var(--s-rose-fg);
+  --color-rose-900: var(--s-rose-fg2);
+  --color-amber-50: var(--s-amber-bg);
+  --color-amber-100: var(--s-amber-bg2);
+  --color-amber-200: var(--s-amber-line);
+  --color-amber-300: var(--s-amber-line2);
+  --color-amber-700: var(--s-amber-fg);
+  --color-amber-900: var(--s-amber-fg2);
+  --color-sky-50: var(--s-sky-bg);
+  --color-sky-100: var(--s-sky-bg2);
+  --color-sky-200: var(--s-sky-line);
+  --color-sky-300: var(--s-sky-line2);
+  --color-sky-700: var(--s-sky-fg);
+  --color-sky-900: var(--s-sky-fg2);
+  --color-violet-50: var(--s-violet-bg);
+  --color-violet-100: var(--s-violet-bg2);
+  --color-violet-200: var(--s-violet-line);
+  --color-violet-700: var(--s-violet-fg);
+  --color-violet-800: var(--s-violet-fg);
+  --color-violet-900: var(--s-violet-fg2);
+  --color-blue-50: var(--s-blue-bg);
+  --color-blue-100: var(--s-blue-bg2);
+  --color-blue-200: var(--s-blue-line);
+  --color-blue-700: var(--s-blue-fg);
+  --color-indigo-50: var(--s-indigo-bg);
+  --color-indigo-100: var(--s-indigo-bg2);
+  --color-indigo-200: var(--s-indigo-line);
+  --color-indigo-700: var(--s-indigo-fg);
+  --color-indigo-900: var(--s-indigo-fg2);
+  --color-teal-100: var(--s-teal-bg2);
+  --color-teal-700: var(--s-teal-fg);
+  --color-orange-100: var(--s-orange-bg2);
+  --color-orange-700: var(--s-orange-fg);
+  --color-fuchsia-100: var(--s-fuchsia-bg2);
+  --color-fuchsia-700: var(--s-fuchsia-fg);
 }
 
-/* RecruitersOS (Meridian) brand accent: generates bg-brand / text-brand /
-   ring-brand / border-brand utilities. Keep in sync with the portal's --brand. */
-@theme {
-  --color-brand: #2e5bd7;
-  --color-brand-soft: rgba(46, 91, 215, 0.09);
+/* ---------------- Light (default, matches the portal's light face) -------- */
+:root {
+  color-scheme: light;
+  --brand: #2e5bd7;
+  --brand-soft: rgba(46, 91, 215, 0.09);
+
+  --t-bg: #f7f8fa;
+  --t-surface: #ffffff;
+  --t-surface-2: #f4f5f7;
+  --t-border: #e5e8ee;
+  --t-border-strong: #cfd5df;
+  --t-dim: #8a93a5;
+  --t-dim-2: #6e7787;
+  --t-muted: #4b5364;
+  --t-muted-strong: #3a4150;
+  --t-ink-2: #232936;
+  --t-ink: #14181f;
+  --t-ink-solid: #14181f;
+  --t-ink-solid-2: #232936;
+
+  --s-emerald-bg: #ecfdf5;  --s-emerald-bg2: #d1fae5;  --s-emerald-line: #a7f3d0; --s-emerald-line2: #6ee7b7; --s-emerald-fg: #047857; --s-emerald-fg2: #064e3b;
+  --s-rose-bg: #fff1f2;     --s-rose-bg2: #ffe4e6;     --s-rose-line: #fecdd3;   --s-rose-line2: #fda4af;   --s-rose-fg: #be123c;    --s-rose-fg2: #881337;
+  --s-amber-bg: #fffbeb;    --s-amber-bg2: #fef3c7;    --s-amber-line: #fde68a;  --s-amber-line2: #fcd34d;  --s-amber-fg: #b45309;   --s-amber-fg2: #78350f;
+  --s-sky-bg: #f0f9ff;      --s-sky-bg2: #e0f2fe;      --s-sky-line: #bae6fd;    --s-sky-line2: #7dd3fc;    --s-sky-fg: #0369a1;     --s-sky-fg2: #0c4a6e;
+  --s-violet-bg: #f5f3ff;   --s-violet-bg2: #ede9fe;   --s-violet-line: #ddd6fe; --s-violet-fg: #6d28d9;    --s-violet-fg2: #4c1d95;
+  --s-blue-bg: #eff6ff;     --s-blue-bg2: #dbeafe;     --s-blue-line: #bfdbfe;   --s-blue-fg: #1d4ed8;
+  --s-indigo-bg: #eef2ff;   --s-indigo-bg2: #e0e7ff;   --s-indigo-line: #c7d2fe; --s-indigo-fg: #4338ca;    --s-indigo-fg2: #312e81;
+  --s-teal-bg2: #ccfbf1;    --s-teal-fg: #0f766e;
+  --s-orange-bg2: #ffedd5;  --s-orange-fg: #c2410c;
+  --s-fuchsia-bg2: #fae8ff; --s-fuchsia-fg: #a21caf;
+}
+
+/* ---------------- Dark (matches the portal's dark face) ------------------- */
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --brand-soft: rgba(86, 127, 228, 0.16);
+
+  --t-bg: #0f1216;
+  --t-surface: #171b22;
+  --t-surface-2: #1e242d;
+  --t-border: #262c36;
+  --t-border-strong: #3a4250;
+  --t-dim: #737d8d;
+  --t-dim-2: #8a93a5;
+  --t-muted: #aab2c0;
+  --t-muted-strong: #c6ccd8;
+  --t-ink-2: #e3e7ee;
+  --t-ink: #f2f4f8;
+  --t-ink-solid: #262c36;
+  --t-ink-solid-2: #313847;
+
+  --s-emerald-bg: rgba(16, 185, 129, 0.10); --s-emerald-bg2: rgba(16, 185, 129, 0.16); --s-emerald-line: rgba(16, 185, 129, 0.35); --s-emerald-line2: rgba(16, 185, 129, 0.5); --s-emerald-fg: #34d399; --s-emerald-fg2: #6ee7b7;
+  --s-rose-bg: rgba(244, 63, 94, 0.10);     --s-rose-bg2: rgba(244, 63, 94, 0.16);     --s-rose-line: rgba(244, 63, 94, 0.35);     --s-rose-line2: rgba(244, 63, 94, 0.5);     --s-rose-fg: #fb7185;    --s-rose-fg2: #fda4af;
+  --s-amber-bg: rgba(245, 158, 11, 0.10);   --s-amber-bg2: rgba(245, 158, 11, 0.16);   --s-amber-line: rgba(245, 158, 11, 0.35);   --s-amber-line2: rgba(245, 158, 11, 0.5);   --s-amber-fg: #fbbf24;   --s-amber-fg2: #fcd34d;
+  --s-sky-bg: rgba(14, 165, 233, 0.10);     --s-sky-bg2: rgba(14, 165, 233, 0.16);     --s-sky-line: rgba(14, 165, 233, 0.35);     --s-sky-line2: rgba(14, 165, 233, 0.5);     --s-sky-fg: #38bdf8;     --s-sky-fg2: #7dd3fc;
+  --s-violet-bg: rgba(139, 92, 246, 0.10);  --s-violet-bg2: rgba(139, 92, 246, 0.16);  --s-violet-line: rgba(139, 92, 246, 0.35);  --s-violet-fg: #a78bfa;  --s-violet-fg2: #c4b5fd;
+  --s-blue-bg: rgba(59, 130, 246, 0.10);    --s-blue-bg2: rgba(59, 130, 246, 0.16);    --s-blue-line: rgba(59, 130, 246, 0.35);    --s-blue-fg: #60a5fa;
+  --s-indigo-bg: rgba(99, 102, 241, 0.10);  --s-indigo-bg2: rgba(99, 102, 241, 0.16);  --s-indigo-line: rgba(99, 102, 241, 0.35);  --s-indigo-fg: #818cf8;  --s-indigo-fg2: #a5b4fc;
+  --s-teal-bg2: rgba(20, 184, 166, 0.16);   --s-teal-fg: #2dd4bf;
+  --s-orange-bg2: rgba(249, 115, 22, 0.16); --s-orange-fg: #fb923c;
+  --s-fuchsia-bg2: rgba(217, 70, 239, 0.16); --s-fuchsia-fg: #e879f9;
 }
 
 html {
@@ -22,9 +161,18 @@ html {
 body {
   /* Meridian type: Inter, matching the RecruitersOS portal. */
   font-family: var(--font-inter-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--t-bg);
+  color: var(--t-ink);
 }
 
 /* Tabular figures keep stat columns aligned as numbers update live. */
 .tabular-nums {
   font-variant-numeric: tabular-nums;
+}
+
+/* Embedded in the portal (iframe): the portal supplies the chrome, so hide
+   this app's own logo and sign-in affordances. It should read as a native
+   panel of the surrounding portal, never as a separate product. */
+html.embedded .emb-hide {
+  display: none !important;
 }

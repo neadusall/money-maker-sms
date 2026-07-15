@@ -10,7 +10,7 @@ export default async function LoginPage({
 
   return (
     <div className="mx-auto flex min-h-[70vh] max-w-md flex-col justify-center">
-      <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm">
+      <div className="rounded-2xl border border-zinc-200 bg-surface p-8 shadow-sm">
         <div className="flex justify-center">
           <Logo />
         </div>

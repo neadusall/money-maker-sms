@@ -49,23 +49,27 @@ export async function GET(req: Request) {
   const expires = new Date(Date.now() + ONE_YEAR_MS);
   await db.insert(sessions).values({ sessionToken, userId: user.id, expires });
 
-  const secure = (process.env.AUTH_URL ?? "").startsWith("https");
+  // Served same-origin under the portal's domain (basePath /ostext-app), so
+  // the iframe embed is first-party everywhere and Lax is right on any host.
+  const proto = req.headers.get("x-forwarded-proto") ?? "";
+  const secure = proto === "https" || (process.env.AUTH_URL ?? "").startsWith("https");
   const cookieName = secure ? "__Secure-authjs.session-token" : "authjs.session-token";
   const jar = await cookies();
   jar.set(cookieName, sessionToken, {
     httpOnly: true,
     secure,
-    // SameSite=None (+ Partitioned for Chrome's third-party-cookie rules): the
-    // portal embeds this app in an iframe, and on a white-label portal domain
-    // (e.g. app.lumesp.com) that iframe is CROSS-SITE. A Lax cookie is never
-    // sent there, so the SSO sign-in silently fails and users see the email
-    // login form instead. None requires Secure, so keep Lax on plain-http dev.
-    sameSite: secure ? "none" : "lax",
-    ...(secure ? { partitioned: true } : {}),
+    sameSite: "lax",
     path: "/",
     expires,
   });
 
-  const dest = process.env.AUTH_URL || new URL("/", req.url).toString();
+  // Land in the app ON THE SAME HOST the user entered from (recruitersos.co or
+  // a white-label domain), forwarding the portal's theme + accent so the UI
+  // paints in the matching skin immediately.
+  const dest = new URL("/ostext-app/", req.url);
+  const theme = url.searchParams.get("theme");
+  const accent = url.searchParams.get("accent");
+  if (theme === "dark" || theme === "light") dest.searchParams.set("theme", theme);
+  if (accent && /^#[0-9a-fA-F]{3,8}$/.test(accent)) dest.searchParams.set("accent", accent);
   return NextResponse.redirect(dest);
 }

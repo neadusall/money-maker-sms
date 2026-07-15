@@ -32,15 +32,15 @@ export default async function InboxIndex({
               name="fromPhone"
               placeholder="+15555550123"
               required
-              className="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-sm"
+              className="rounded-md border border-amber-300 bg-surface px-3 py-1.5 text-sm"
             />
             <input
               name="body"
               placeholder="Possibly, send me details."
               required
-              className="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-sm"
+              className="rounded-md border border-amber-300 bg-surface px-3 py-1.5 text-sm"
             />
-            <button className="rounded-md bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800">
+            <button className="rounded-md bg-[#b45309] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#92400e]">
               Simulate inbound
             </button>
           </form>

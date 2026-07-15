@@ -41,7 +41,7 @@ export function DeleteConversationButton({
         <button
           type="submit"
           onClick={(e) => e.stopPropagation()}
-          className="rounded-md bg-rose-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-rose-700"
+          className="rounded-md bg-rose-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-[#be123c]"
         >
           Delete
         </button>
@@ -53,7 +53,7 @@ export function DeleteConversationButton({
           e.stopPropagation();
           setConfirming(false);
         }}
-        className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] text-zinc-600 hover:bg-zinc-50"
+        className="rounded-md border border-zinc-300 bg-surface px-2 py-1 text-[11px] text-zinc-600 hover:bg-zinc-50"
       >
         Cancel
       </button>

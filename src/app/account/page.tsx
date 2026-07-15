@@ -24,7 +24,7 @@ export default async function AccountPage() {
       <h1 className="mt-1 text-2xl font-semibold tracking-tight">Account</h1>
       <p className="mt-1 text-sm text-zinc-600">Your profile photo and sign-in details.</p>
 
-      <div className="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
+      <div className="mt-6 rounded-xl border border-zinc-200 bg-surface p-6">
         <h2 className="text-sm font-semibold text-zinc-900">Profile photo</h2>
         <p className="mt-1 text-xs text-zinc-500">
           Shown as your avatar in the top-right menu.
@@ -34,7 +34,7 @@ export default async function AccountPage() {
         </div>
       </div>
 
-      <div className="mt-4 rounded-xl border border-zinc-200 bg-white p-6">
+      <div className="mt-4 rounded-xl border border-zinc-200 bg-surface p-6">
         <h2 className="text-sm font-semibold text-zinc-900">Sign-in email</h2>
         <p className="mt-1 text-sm text-zinc-700">{email}</p>
         <p className="mt-2 text-xs text-zinc-500">

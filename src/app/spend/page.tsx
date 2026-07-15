@@ -166,7 +166,7 @@ export default async function SpendPage() {
       </div>
 
       {/* Daily spend, last 14 days */}
-      <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+      <div className="rounded-2xl border border-zinc-200 bg-surface p-5 shadow-sm">
         <div className="flex items-baseline justify-between">
           <h3 className="text-sm font-semibold text-zinc-700">Daily spend</h3>
           <span className="text-[10px] uppercase tracking-wide text-zinc-400">last 14 days · {TZ}</span>
@@ -254,7 +254,7 @@ export default async function SpendPage() {
 
 function Panel({ title, total, sub, children }: { title: string; total: string; sub: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+    <div className="rounded-2xl border border-zinc-200 bg-surface p-5 shadow-sm">
       <div className="flex items-baseline justify-between">
         <h3 className="text-sm font-semibold text-zinc-700">{title}</h3>
         <div className="text-right">

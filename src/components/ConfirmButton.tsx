@@ -21,7 +21,7 @@ export function ConfirmButton({
         <form action={action}>
           <button
             type="submit"
-            className="rounded-md bg-rose-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-rose-700"
+            className="rounded-md bg-rose-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-[#be123c]"
           >
             {confirmLabel}
           </button>
@@ -29,7 +29,7 @@ export function ConfirmButton({
         <button
           type="button"
           onClick={() => setConfirming(false)}
-          className="rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs text-zinc-600 hover:bg-zinc-50"
+          className="rounded-md border border-zinc-300 bg-surface px-2.5 py-1.5 text-xs text-zinc-600 hover:bg-zinc-50"
         >
           Cancel
         </button>
@@ -43,7 +43,7 @@ export function ConfirmButton({
       onClick={() => setConfirming(true)}
       className={
         className ??
-        "inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-sm font-medium text-rose-600 hover:bg-rose-50"
+        "inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-surface px-3 py-1.5 text-sm font-medium text-rose-600 hover:bg-rose-50"
       }
     >
       {children}
