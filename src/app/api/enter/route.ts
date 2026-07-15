@@ -75,11 +75,14 @@ export async function GET(req: Request) {
 
   // Land in the app ON THE SAME HOST the user entered from (recruitersos.co or
   // a white-label domain), forwarding the portal's theme + accent so the UI
-  // paints in the matching skin immediately.
+  // paints in the matching skin immediately. RELATIVE redirect, never absolute:
+  // behind the TLS-terminating proxy req.url is plain http://, and an absolute
+  // http:// Location inside an https:// iframe is mixed content, which the
+  // browser silently blocks (dead frame).
   const dest = new URL("/ostext-app/", req.url);
   const theme = url.searchParams.get("theme");
   const accent = url.searchParams.get("accent");
   if (theme === "dark" || theme === "light") dest.searchParams.set("theme", theme);
   if (accent && /^#[0-9a-fA-F]{3,8}$/.test(accent)) dest.searchParams.set("accent", accent);
-  return NextResponse.redirect(dest);
+  return new NextResponse(null, { status: 302, headers: { Location: dest.pathname + dest.search } });
 }
