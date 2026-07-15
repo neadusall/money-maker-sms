@@ -28,19 +28,29 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "invalid or missing token" }, { status: 403 });
   }
 
-  const email = (process.env.ACCESS_EMAIL || (process.env.ALLOWED_EMAILS ?? "").split(",")[0] || "")
-    .trim()
-    .toLowerCase();
+  // Per-recruiter identity: the portal forwards the signed-in recruiter's
+  // email (+ name), so each person enters as THEMSELVES instead of one shared
+  // account. Only honored alongside the valid token (checked above), so an
+  // identity can't be forged without the shared secret. Falls back to the
+  // configured shared account when the caller sends no email.
+  const paramEmail = (url.searchParams.get("email") || "").trim().toLowerCase();
+  const email = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(paramEmail)
+    ? paramEmail
+    : (process.env.ACCESS_EMAIL || (process.env.ALLOWED_EMAILS ?? "").split(",")[0] || "")
+        .trim()
+        .toLowerCase();
   if (!email) {
     return NextResponse.json({ error: "no access email configured" }, { status: 500 });
   }
+  const name = (url.searchParams.get("name") || "").trim().slice(0, 80) || email.split("@")[0];
 
-  // Get or create the user this link signs in as.
+  // Get or create the user this link signs in as (an existing user's saved
+  // name wins over the forwarded one).
   let [user] = await db.select().from(users).where(eq(users.email, email));
   if (!user) {
     [user] = await db
       .insert(users)
-      .values({ email, name: email.split("@")[0], emailVerified: new Date() })
+      .values({ email, name, emailVerified: new Date() })
       .returning();
   }
 
