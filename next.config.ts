@@ -11,6 +11,12 @@ const nextConfig: NextConfig = {
   // is always first-party, and no house domain ever shows in a customer URL.
   basePath: "/ostext-app",
 
+  // Serve /ostext-app/ directly instead of 308-stripping to the bare
+  // /ostext-app path: the SSO landing redirect ends on the trailing-slash URL,
+  // and the bare path needs a separate proxy matcher at the edge. Skipping the
+  // normalization redirect makes the sign-in chain edge-config-independent.
+  skipTrailingSlashRedirect: true,
+
   experimental: {
     serverActions: {
       // CSV contact uploads go through a Server Action; the default body limit is
