@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 
-const PUBLIC_PATHS = ["/login", "/verify-request", "/api/auth", "/api/webhooks", "/api/qstash", "/api/enter"];
+// /api/import is public here but does its own shared-secret Bearer auth
+// (ACCESS_TOKEN), same trust model as /api/enter.
+const PUBLIC_PATHS = ["/login", "/verify-request", "/api/auth", "/api/webhooks", "/api/qstash", "/api/enter", "/api/import"];
 
 // Must mirror next.config.ts basePath. The auth()-wrapped request reaches this
 // proxy with the basePath still on nextUrl.pathname (observed in production:
