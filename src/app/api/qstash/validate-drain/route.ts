@@ -28,6 +28,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "missing campaignId" }, { status: 400 });
   }
 
+  // SAFEGUARD: with no Telnyx key every lookup would come back "unknown" and the
+  // strict keep-mobiles-only rule below would delete the ENTIRE batch. Refuse to
+  // run instead: contacts stay "validating" (never textable) until the key is set.
+  if (!process.env.TELNYX_API_KEY) {
+    console.warn(`[validate-drain ${campaignId}] TELNYX_API_KEY missing — holding contacts as validating, nothing removed`);
+    return NextResponse.json({ ok: false, error: "telnyx_key_missing", kept: 0, removed: 0 });
+  }
+
   const batch = await db
     .select()
     .from(contacts)

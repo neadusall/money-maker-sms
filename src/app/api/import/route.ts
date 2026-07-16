@@ -23,8 +23,15 @@ export const runtime = "nodejs";
  *   {
  *     campaign: { name, smsTemplate?, positionSummary?, recruiterName?, recruiterEmail?, location? },
  *     contacts: [{ firstName?, lastName?, company?, jobTitle?, phone, email?, linkedinUrl?, location?, customFields? }],
- *     validate?: boolean   // run the Telnyx mobile-validation drain on the new contacts
+ *     validate?: boolean   // Telnyx cell-line confirmation; DEFAULTS ON (pass false to skip)
  *   }
+ *
+ * SAFEGUARD: validation defaults ON and is fail-closed. Contacts land as
+ * "validating" (the sender only ever picks "pending", so an unconfirmed number
+ * can never be texted) and the Telnyx drain promotes confirmed cells / removes
+ * the rest. If the drain can't run (QStash unconfigured) the contacts are NOT
+ * silently downgraded to textable — they stay held and the response says so
+ * (validation: "blocked_no_qstash") so the portal can surface it.
  *
  * Contact handling mirrors the CSV upload exactly: phones normalized to E.164
  * (invalid rows skipped), deduped by (campaign, phone), and numbers that opted
@@ -154,7 +161,9 @@ export async function POST(req: Request) {
   }
   const toInsert = normalized.filter((r) => !optedOut.has(r.phone));
 
-  const validate = body.validate === true && isQStashConfigured();
+  // Default ON, and independent of QStash: an unvalidated contact must never
+  // become textable just because the drain queue happens to be unconfigured.
+  const validate = body.validate !== false;
   let added = 0;
   for (let i = 0; i < toInsert.length; i += INSERT_CHUNK) {
     const chunk = toInsert.slice(i, i + INSERT_CHUNK);
@@ -181,7 +190,7 @@ export async function POST(req: Request) {
   }
 
   if (added > 0) {
-    if (validate) await enqueueValidationDrain(campaign.id, 1);
+    if (validate && isQStashConfigured()) await enqueueValidationDrain(campaign.id, 1);
     if (isQStashConfigured()) await enqueueScoreDrain(campaign.id, 3);
   }
 
@@ -196,5 +205,8 @@ export async function POST(req: Request) {
     optedOut: optedOut.size,
     // in-payload dupes + already-in-campaign rows the unique index absorbed
     deduped: dupInPayload + (toInsert.length - added),
+    // "queued": Telnyx drain is running; "blocked_no_qstash": contacts are held
+    // as validating (never textable) until the drain infra is configured/kicked.
+    validation: validate ? (isQStashConfigured() ? "queued" : "blocked_no_qstash") : "off",
   });
 }
