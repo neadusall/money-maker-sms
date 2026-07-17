@@ -1,10 +1,62 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne, inArray, gte } from "drizzle-orm";
 import { db } from "@/db/client";
 import { contacts, conversations, messages, suppressedNumbers, type Campaign, type Contact } from "@/db/schema";
 import { renderTemplate, findUnmergedTokens } from "./merge";
 import { sendSms } from "./telnyx";
 import { paceForNextSend } from "./pacing";
 import { isAlwaysAllowed } from "./always-allow";
+
+/**
+ * The cross-campaign fail-safe. Answers: "has ANY other campaign already texted
+ * (or been told to stop by) this phone number?" Every successful send writes a
+ * suppressedNumbers row (reason "sent"), and opt-outs write "opted_out"/"messaged",
+ * so this ledger is the single source of truth for "already contacted."
+ *
+ * This is what makes overlapping lists safe: activate the combined list AND its
+ * subsets and no human is ever texted twice — whichever campaign reaches a number
+ * first wins, and every other campaign skips it here, before a message is sent.
+ *
+ * Race note: prod runs the sequential internal clock (one send at a time across
+ * all campaigns), so this read and the post-send suppression insert are effectively
+ * atomic. Always-allow numbers (e.g. your own test line) are never blocked.
+ *
+ * Cooldown: OSTEXT_RECONTACT_COOLDOWN_DAYS > 0 limits the block to a window (so a
+ * number may be re-contacted for a different role after N days); unset/0 = never
+ * text the same number twice across campaigns. OSTEXT_CROSS_CAMPAIGN_GUARD=off
+ * disables the guard entirely (not recommended).
+ */
+export async function alreadyContactedElsewhere(
+  campaignId: string,
+  phone: string,
+): Promise<{ blocked: boolean; byCampaignId?: string }> {
+  if (process.env.OSTEXT_CROSS_CAMPAIGN_GUARD === "off") return { blocked: false };
+  if (isAlwaysAllowed(phone)) return { blocked: false };
+  const cooldownDays = Number(process.env.OSTEXT_RECONTACT_COOLDOWN_DAYS) || 0;
+  const conds = [
+    eq(suppressedNumbers.phone, phone),
+    ne(suppressedNumbers.campaignId, campaignId),
+    inArray(suppressedNumbers.reason, ["sent", "messaged", "opted_out"]),
+  ];
+  if (cooldownDays > 0) {
+    conds.push(gte(suppressedNumbers.createdAt, new Date(Date.now() - cooldownDays * 86_400_000)));
+  }
+  const [prior] = await db
+    .select({ campaignId: suppressedNumbers.campaignId })
+    .from(suppressedNumbers)
+    .where(and(...conds))
+    .limit(1);
+  return prior ? { blocked: true, byCampaignId: prior.campaignId } : { blocked: false };
+}
+
+/** Archive a contact that the cross-campaign guard blocked: soft-delete (so it
+ *  leaves the sendable pool and the active list, recoverable in Archived) with a
+ *  plain-English reason. Never sends, never double-texts. */
+async function archiveAsDuplicate(contactId: string): Promise<void> {
+  await db
+    .update(contacts)
+    .set({ deletedAt: new Date(), lastError: "Skipped: this number was already texted by another campaign (duplicate guard)" })
+    .where(eq(contacts.id, contactId));
+}
 
 export async function getOrCreateConversation(campaignId: string, contactId: string) {
   const existing = await db
@@ -29,6 +81,15 @@ export async function processContactSend(
   campaign: Campaign,
   contact: Contact,
 ): Promise<"sent" | "failed" | "skipped"> {
+  // CROSS-CAMPAIGN FAIL-SAFE (first, before we claim or send): never text a
+  // number another campaign already texted. Archives the duplicate so it leaves
+  // this campaign's sendable pool and shows in Archived with the reason.
+  const dup = await alreadyContactedElsewhere(campaign.id, contact.phone);
+  if (dup.blocked) {
+    await archiveAsDuplicate(contact.id);
+    return "skipped";
+  }
+
   // Atomically CLAIM this contact before doing anything else: flip pending->queued
   // only if it's still pending. If another concurrent pass already claimed it,
   // this returns 0 rows and we skip — so a contact can never be sent twice even

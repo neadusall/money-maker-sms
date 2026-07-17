@@ -27,8 +27,8 @@ import { parseCsv, type ImportedContact } from "./csv";
 import { regionForLocation, type RegionKey } from "./region";
 import { alwaysAllowNumbers } from "./always-allow";
 import { seedContacts } from "./seed-contacts";
-import { renderTemplate, findUnmergedTokens } from "./merge";
 import { sendSms } from "./telnyx";
+import { processContactSend } from "./send";
 import { normalizePhone } from "./phone";
 import { isStopKeyword } from "./opt-out";
 import { classifyReply, isAutoSendCandidate, isAutoIgnoreNegative } from "./classify";
@@ -554,56 +554,14 @@ export async function sendCampaignBatch(campaignId: string): Promise<void> {
   let failed = 0;
   let skipped = 0;
 
+  // Route every send through the shared processContactSend so the cross-campaign
+  // duplicate guard, atomic claim, template-render check, pacing, and suppression
+  // logging are identical to the automated drain — one send path, no drift.
   for (const contact of pending) {
-    // Atomically claim (pending->queued) so concurrent passes can't double-send.
-    const claimed = await db
-      .update(contacts)
-      .set({ status: "queued" })
-      .where(and(eq(contacts.id, contact.id), eq(contacts.status, "pending")))
-      .returning({ id: contacts.id });
-    if (claimed.length === 0) {
-      skipped++;
-      continue;
-    }
-
-    const body = renderTemplate(campaign.smsTemplate, contact);
-    const missing = findUnmergedTokens(campaign.smsTemplate, contact);
-    if (missing.length > 0) {
-      await db
-        .update(contacts)
-        .set({ status: "failed", lastError: `missing merge fields: ${missing.join(", ")}` })
-        .where(eq(contacts.id, contact.id));
-      skipped++;
-      continue;
-    }
-
-    await paceForNextSend();
-
-    const result = await sendSms({ to: contact.phone, body, from: campaign.fromNumber ?? undefined });
-
-    if (!result.ok) {
-      await db
-        .update(contacts)
-        .set({ status: "failed", lastError: result.error })
-        .where(eq(contacts.id, contact.id));
-      failed++;
-      continue;
-    }
-
-    const convo = await getOrCreateConversation(campaign.id, contact.id);
-    await db.insert(messages).values({
-      conversationId: convo.id,
-      direction: "outbound",
-      status: "sent",
-      body,
-      telnyxId: result.telnyxId,
-    });
-    await db.update(contacts).set({ status: "sent", lastError: null }).where(eq(contacts.id, contact.id));
-    await db
-      .update(conversations)
-      .set({ lastMessageAt: new Date() })
-      .where(eq(conversations.id, convo.id));
-    sent++;
+    const outcome = await processContactSend(campaign, contact);
+    if (outcome === "sent") sent++;
+    else if (outcome === "failed") failed++;
+    else skipped++;
   }
 
   await db.update(campaigns).set({ status: "active", updatedAt: new Date() }).where(eq(campaigns.id, campaignId));
