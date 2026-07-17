@@ -43,6 +43,7 @@ import {
   enqueueValidationDrain,
   enqueueScoreDrain,
 } from "./schedule";
+import { kickSoon } from "./internal-clock";
 import {
   isPositionEmailConfigured,
   extractEmail,
@@ -72,18 +73,21 @@ function parseScheduledAt(formData: FormData): Date | null {
 }
 
 /**
- * If a campaign has a future schedule and QStash is available, arm it: mark it
- * active and kick off the drain, which then bounces (waiting on the schedule, the
- * send window, and fit scoring) until the scheduled moment and sends. No-op when
- * the schedule is blank/past or QStash isn't configured — the user launches
- * manually with the Launch button in that case.
+ * If a campaign has a future schedule, arm it: mark it active and kick off the
+ * drain, which then bounces (waiting on the schedule, the send window, and fit
+ * scoring) until the scheduled moment and sends. QStash carries the wait when
+ * configured; otherwise the internal clock re-checks every sweep. No-op when
+ * the schedule is blank/past — the user launches manually in that case.
  */
 async function maybeArmSchedule(campaignId: string, scheduledAt: Date | null): Promise<void> {
   if (!scheduledAt || scheduledAt.getTime() <= Date.now()) return;
-  if (!isQStashConfigured()) return;
   await db.update(campaigns).set({ status: "active", updatedAt: new Date() }).where(eq(campaigns.id, campaignId));
-  const secs = Math.min(6 * 3600, Math.max(60, Math.ceil((scheduledAt.getTime() - Date.now()) / 1000)));
-  await enqueueCampaignDrain(campaignId, secs);
+  if (isQStashConfigured()) {
+    const secs = Math.min(6 * 3600, Math.max(60, Math.ceil((scheduledAt.getTime() - Date.now()) / 1000)));
+    await enqueueCampaignDrain(campaignId, secs);
+  } else {
+    kickSoon();
+  }
 }
 
 /**
@@ -269,7 +273,9 @@ export async function createCampaign(formData: FormData) {
   const file = formData.get("csv");
   let summary: { added: number; prev: number; dup: number; region: number } | null = null;
   if (file instanceof File && file.size > 0) {
-    const validate = formData.get("validateMobile") != null && isQStashConfigured();
+    // Validation no longer depends on QStash: the internal clock drains
+  // "validating" contacts too, so the checkbox alone decides.
+  const validate = formData.get("validateMobile") != null;
     const skipPrev = formData.get("skipPreviouslyTexted") != null;
     const text = await file.text();
     const result = parseCsv(text);
@@ -297,9 +303,13 @@ export async function createCampaign(formData: FormData) {
           })),
         )
         .onConflictDoNothing({ target: [contacts.campaignId, contacts.phone] });
-      if (validate) await enqueueValidationDrain(created.id, 1);
       // Score everyone's fit for the role in the background.
-      if (isQStashConfigured()) await enqueueScoreDrain(created.id, 3);
+      if (isQStashConfigured()) {
+        if (validate) await enqueueValidationDrain(created.id, 1);
+        await enqueueScoreDrain(created.id, 3);
+      } else {
+        kickSoon();
+      }
     }
     summary = { added: toInsert.length, prev: prevSkipped, dup: dupSkipped, region: outOfRegion };
   }
@@ -370,6 +380,13 @@ export async function updateCampaign(campaignId: string, formData: FormData) {
 
 export async function setCampaignStatus(campaignId: string, status: "active" | "paused" | "completed" | "draft") {
   await db.update(campaigns).set({ status, updatedAt: new Date() }).where(eq(campaigns.id, campaignId));
+  // Activate/Resume must actually START the pipeline, not just recolor the badge:
+  // kick the drain so validation, scoring, and sending proceed on their own.
+  if (status === "active") {
+    if (isQStashConfigured()) await enqueueCampaignDrain(campaignId, 1);
+    else kickSoon();
+  }
+  revalidatePath("/");
   revalidatePath(`/campaigns/${campaignId}`);
 }
 
@@ -378,7 +395,9 @@ export async function uploadContactsCsv(campaignId: string, formData: FormData):
   if (!(file instanceof File)) {
     throw new Error("No CSV file provided");
   }
-  const validate = formData.get("validateMobile") != null && isQStashConfigured();
+  // Validation no longer depends on QStash: the internal clock drains
+  // "validating" contacts too, so the checkbox alone decides.
+  const validate = formData.get("validateMobile") != null;
   const skipPrev = formData.get("skipPreviouslyTexted") != null;
   const text = await file.text();
   const result = parseCsv(text);
@@ -407,8 +426,12 @@ export async function uploadContactsCsv(campaignId: string, formData: FormData):
         })),
       )
       .onConflictDoNothing({ target: [contacts.campaignId, contacts.phone] });
-    if (validate) await enqueueValidationDrain(campaignId, 1);
-    if (isQStashConfigured()) await enqueueScoreDrain(campaignId, 3);
+    if (isQStashConfigured()) {
+      if (validate) await enqueueValidationDrain(campaignId, 1);
+      await enqueueScoreDrain(campaignId, 3);
+    } else {
+      kickSoon();
+    }
   }
 
   revalidatePath("/");
@@ -419,12 +442,12 @@ export async function uploadContactsCsv(campaignId: string, formData: FormData):
 
 /** Re-validate existing pending/failed contacts: mark them validating and kick off the drain. */
 export async function validateExistingContacts(campaignId: string): Promise<void> {
-  if (!isQStashConfigured()) return;
   await db
     .update(contacts)
     .set({ status: "validating" })
     .where(and(eq(contacts.campaignId, campaignId), inArray(contacts.status, ["pending", "failed"])));
-  await enqueueValidationDrain(campaignId, 1);
+  if (isQStashConfigured()) await enqueueValidationDrain(campaignId, 1);
+  else kickSoon();
   revalidatePath(`/campaigns/${campaignId}/contacts`);
   revalidatePath(`/campaigns/${campaignId}`);
 }
@@ -622,8 +645,10 @@ export async function startCampaignSend(campaignId: string): Promise<void> {
     // Kick off a self-continuing drain that sends every pending contact, paced.
     await enqueueCampaignDrain(campaignId, 1);
   } else {
-    // No scheduler configured — fall back to one synchronous batch.
+    // No QStash: send one synchronous batch for instant feedback, then let the
+    // internal clock keep draining the rest on its own.
     await sendCampaignBatch(campaignId);
+    kickSoon();
     return;
   }
 
@@ -1168,10 +1193,10 @@ export async function deleteTodo(id: string) {
 
 /** Kick off background fit-scoring for every unscored contact in a campaign. */
 export async function scoreCampaignContacts(campaignId: string): Promise<void> {
-  if (!isQStashConfigured()) return;
   // Clear any prior "scoring paused" flag so the UI reflects a fresh attempt.
   await db.update(campaigns).set({ scoringError: null }).where(eq(campaigns.id, campaignId));
-  await enqueueScoreDrain(campaignId, 1);
+  if (isQStashConfigured()) await enqueueScoreDrain(campaignId, 1);
+  else kickSoon();
   revalidatePath(`/campaigns/${campaignId}/contacts`);
   revalidatePath(`/campaigns/${campaignId}`);
 }

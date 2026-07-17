@@ -79,8 +79,9 @@ function publicBaseUrl(): string {
 }
 
 /**
- * Persist a scheduled outbound reply and ask QStash to call our dispatch
- * endpoint after `delaySeconds`. Returns the scheduled row id.
+ * Persist a scheduled outbound reply and arrange delivery after `delaySeconds`:
+ * via QStash calling our dispatch endpoint when configured, else the internal
+ * clock picks the row up once sendAt is due. Returns the scheduled row id.
  */
 export async function scheduleReply(args: {
   conversationId: string;
@@ -98,11 +99,13 @@ export async function scheduleReply(args: {
     })
     .returning({ id: scheduledMessages.id });
 
-  await qstashClient().publishJSON({
-    url: `${publicBaseUrl()}/api/qstash/dispatch`,
-    body: { scheduledMessageId: row.id },
-    delay: args.delaySeconds,
-  });
+  if (isQStashConfigured()) {
+    await qstashClient().publishJSON({
+      url: `${publicBaseUrl()}/api/qstash/dispatch`,
+      body: { scheduledMessageId: row.id },
+      delay: args.delaySeconds,
+    });
+  }
 
   return row.id;
 }

@@ -221,7 +221,7 @@ export default async function Dashboard() {
                     </div>
                     <div className="mt-0.5 text-xs text-zinc-400">
                       {new Date(c.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-                      {" · "}
+                      {" · AI replies: "}
                       {c.llmMode.replace(/_/g, " ")}
                     </div>
                   </div>

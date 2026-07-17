@@ -3,7 +3,8 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db/client";
 import { campaigns, contacts, suppressedNumbers } from "@/db/schema";
 import { normalizePhone } from "@/lib/phone";
-import { isQStashConfigured, enqueueValidationDrain, enqueueScoreDrain } from "@/lib/schedule";
+import { isQStashConfigured, enqueueValidationDrain, enqueueScoreDrain, enqueueCampaignDrain } from "@/lib/schedule";
+import { kickSoon } from "@/lib/internal-clock";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -29,9 +30,9 @@ export const runtime = "nodejs";
  * SAFEGUARD: validation defaults ON and is fail-closed. Contacts land as
  * "validating" (the sender only ever picks "pending", so an unconfirmed number
  * can never be texted) and the Telnyx drain promotes confirmed cells / removes
- * the rest. If the drain can't run (QStash unconfigured) the contacts are NOT
- * silently downgraded to textable — they stay held and the response says so
- * (validation: "blocked_no_qstash") so the portal can surface it.
+ * the rest. The drain runs via QStash when configured, else via the internal
+ * clock — and if it can't make progress (e.g. TELNYX_API_KEY missing) contacts
+ * are NOT silently downgraded to textable; they stay held as "validating".
  *
  * Contact handling mirrors the CSV upload exactly: phones normalized to E.164
  * (invalid rows skipped), deduped by (campaign, phone), and numbers that opted
@@ -62,6 +63,10 @@ interface ImportBody {
     /** The pushing recruiter's assigned phone line (E.164): the campaign texts
      *  from the same number that recruiter calls from. */
     fromNumber?: string;
+    /** Create the campaign already ACTIVE: once validation + scoring drain, it
+     *  texts on its own inside the send window, with no Activate click. Off by
+     *  default so pushed campaigns stay human-launched. */
+    autoStart?: boolean;
   };
   contacts?: ImportContact[];
   validate?: boolean;
@@ -70,10 +75,18 @@ interface ImportBody {
 const MAX_CONTACTS = 25_000;
 const INSERT_CHUNK = 500;
 
+// Campaign names arrive as saved-list names ("VP of Operations · Howell, New
+// Jersey +50mi (combined)"). Texts should say the ROLE, not the list name:
+// keep what's before the separator and drop parentheticals / trailing state codes.
+const roleFromName = (name: string) => {
+  const cleaned = name.split("·")[0].replace(/\(.*?\)/g, "").replace(/,\s*[A-Z]{2}\b.*$/, "").trim();
+  return cleaned || name.trim();
+};
+
 // Safe fallback template: uses only {first_name}, which every pushed contact has,
 // so no contact is ever failed for a missing merge field before the recruiter edits.
-const DEFAULT_TEMPLATE = (role: string) =>
-  `Hi {first_name}, I'm recruiting for a ${role} opening and your background looks like a strong fit. Would you be open to a quick text about it?`;
+const DEFAULT_TEMPLATE = (name: string) =>
+  `Hi {first_name}, I'm recruiting for a ${roleFromName(name)} opening and your background looks like a strong fit. Would you be open to a quick text about it?`;
 
 function bearerToken(req: Request): string {
   const h = req.headers.get("authorization") || "";
@@ -122,12 +135,13 @@ export async function POST(req: Request) {
     .where(eq(campaigns.name, name))
     .orderBy(desc(campaigns.createdAt))
     .limit(1);
+  const autoStart = body.campaign?.autoStart === true;
   if (!campaign) {
     [campaign] = await db
       .insert(campaigns)
       .values({
         name,
-        status: "draft",
+        status: autoStart ? "active" : "draft",
         smsTemplate: clean(body.campaign?.smsTemplate) ?? DEFAULT_TEMPLATE(name),
         positionSummary: clean(body.campaign?.positionSummary),
         recruiterName: clean(body.campaign?.recruiterName),
@@ -205,9 +219,24 @@ export async function POST(req: Request) {
     added += inserted.length;
   }
 
-  if (added > 0) {
-    if (validate && isQStashConfigured()) await enqueueValidationDrain(campaign.id, 1);
-    if (isQStashConfigured()) await enqueueScoreDrain(campaign.id, 3);
+  // A top-up push with autoStart also (re)launches a still-draft campaign.
+  if (autoStart && campaign.status === "draft") {
+    [campaign] = await db
+      .update(campaigns)
+      .set({ status: "active", updatedAt: new Date() })
+      .where(eq(campaigns.id, campaign.id))
+      .returning();
+  }
+
+  if (added > 0 || autoStart) {
+    if (isQStashConfigured()) {
+      if (validate && added > 0) await enqueueValidationDrain(campaign.id, 1);
+      if (added > 0) await enqueueScoreDrain(campaign.id, 3);
+      if (autoStart) await enqueueCampaignDrain(campaign.id, 5);
+    } else {
+      // Self-hosted: the internal clock sweeps validation, scoring, and sending.
+      kickSoon();
+    }
   }
 
   return NextResponse.json({
@@ -221,8 +250,9 @@ export async function POST(req: Request) {
     optedOut: optedOut.size,
     // in-payload dupes + already-in-campaign rows the unique index absorbed
     deduped: dupInPayload + (toInsert.length - added),
-    // "queued": Telnyx drain is running; "blocked_no_qstash": contacts are held
-    // as validating (never textable) until the drain infra is configured/kicked.
-    validation: validate ? (isQStashConfigured() ? "queued" : "blocked_no_qstash") : "off",
+    // "queued": the Telnyx validation drain is running (QStash or the internal
+    // clock). Contacts stay held as "validating" (never textable) until it
+    // confirms each number is a cell.
+    validation: validate ? "queued" : "off",
   });
 }

@@ -111,8 +111,11 @@ export default async function CampaignDetail({
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-semibold tracking-tight">{campaign.name}</h1>
             <StatusBadge status={campaign.status} />
-            <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600">
-              {campaign.llmMode.replace(/_/g, " ")}
+            <span
+              title="How the AI handles replies (campaign status is the badge to the left)"
+              className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600"
+            >
+              AI replies: {campaign.llmMode.replace(/_/g, " ")}
             </span>
             {campaign.salesNavUrl ? (
               <a
@@ -176,7 +179,14 @@ export default async function CampaignDetail({
           </form>
         ) : (
           <form action={resume}>
-            <button className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-100">
+            <button
+              title={
+                campaign.status === "draft"
+                  ? "Starts this campaign: numbers get cell-checked and fit-scored, then texting begins on its own inside the send window"
+                  : "Resumes sending where the campaign left off"
+              }
+              className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
+            >
               {campaign.status === "draft" ? "Activate" : "Resume"}
             </button>
           </form>
