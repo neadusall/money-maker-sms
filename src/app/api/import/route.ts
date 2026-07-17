@@ -59,6 +59,9 @@ interface ImportBody {
     recruiterName?: string;
     recruiterEmail?: string;
     location?: string;
+    /** The pushing recruiter's assigned phone line (E.164): the campaign texts
+     *  from the same number that recruiter calls from. */
+    fromNumber?: string;
   };
   contacts?: ImportContact[];
   validate?: boolean;
@@ -106,6 +109,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: `too many contacts (max ${MAX_CONTACTS})` }, { status: 413 });
   }
 
+  // The sender honors campaign.fromNumber before the shared env number, so a
+  // valid pushed number ties this campaign's texts to the recruiter's own line.
+  const fromNumber = normalizePhone(clean(body.campaign?.fromNumber) ?? "") || null;
+
   // Get-or-create the campaign by exact name, so repeat pushes of the same list
   // top the campaign up instead of forking "Name (2)" copies.
   let created = false;
@@ -126,9 +133,18 @@ export async function POST(req: Request) {
         recruiterName: clean(body.campaign?.recruiterName),
         recruiterEmail: clean(body.campaign?.recruiterEmail),
         location: clean(body.campaign?.location),
+        fromNumber,
       })
       .returning();
     created = true;
+  } else if (fromNumber && !campaign.fromNumber) {
+    // Top-up of a campaign created before per-recruiter numbers existed: adopt
+    // the pushed number. A number someone typed in the UI is never overwritten.
+    [campaign] = await db
+      .update(campaigns)
+      .set({ fromNumber })
+      .where(eq(campaigns.id, campaign.id))
+      .returning();
   }
 
   // Normalize + dedupe within the payload, exactly like the CSV path.
