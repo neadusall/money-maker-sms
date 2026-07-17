@@ -13,6 +13,7 @@ import { formatPhone } from "@/lib/phone";
 import { OPT_OUT_LINE, hasOptOut } from "@/lib/opt-out";
 import { shortRelative, timeOfDay } from "@/lib/time";
 import { Avatar } from "@/components/Avatar";
+import { CallButton } from "@/components/CallButton";
 import { StatusIcon } from "@/components/StatusIcon";
 import { ScoreBadge } from "@/components/ScoreBadge";
 
@@ -89,6 +90,12 @@ export default async function ThreadPage({
           </div>
         </div>
         <div className="flex items-center gap-1">
+          <CallButton
+            phone={contact.phone}
+            name={name}
+            company={contact.company}
+            variant="header"
+          />
           {convo.status === "closed" ? (
             <form action={reopen}>
               <button

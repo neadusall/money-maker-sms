@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Avatar } from "./Avatar";
+import { CallButton } from "./CallButton";
 import { DeleteConversationButton } from "./DeleteConversationButton";
 import { formatPhone } from "@/lib/phone";
 import { shortRelative } from "@/lib/time";
@@ -187,6 +188,11 @@ export function ConversationList({
               return (
                 <li key={c.id} className="relative">
                   <div className="absolute right-2 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5">
+                    <CallButton
+                      phone={c.contact.phone}
+                      name={name}
+                      company={c.contact.company}
+                    />
                     <a
                       href={li.url}
                       target="_blank"
@@ -208,7 +214,7 @@ export function ConversationList({
                   <Link
                     href={href}
                     className={
-                      "block py-3 pl-4 pr-12 transition-colors " +
+                      "block py-3 pl-4 pr-24 transition-colors " +
                       (isActive
                         ? "bg-sky-50"
                         : c.status === "needs_attention"

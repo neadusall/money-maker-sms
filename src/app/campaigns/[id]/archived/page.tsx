@@ -5,6 +5,7 @@ import { db } from "@/db/client";
 import { campaigns } from "@/db/schema";
 import { restoreContact } from "@/lib/actions";
 import { formatPhone } from "@/lib/phone";
+import { CallButton } from "@/components/CallButton";
 
 export const dynamic = "force-dynamic";
 
@@ -135,6 +136,7 @@ export default async function ArchivedPage({
                     </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
+                    <CallButton phone={r.phone} name={name} company={r.company} variant="pill" />
                     <Link
                       href={`/campaigns/${id}/inbox/${r.convo_id}`}
                       className="rounded-lg border border-zinc-300 bg-surface px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50"

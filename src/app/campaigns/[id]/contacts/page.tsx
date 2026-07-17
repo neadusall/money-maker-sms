@@ -14,6 +14,7 @@ import {
   setMinScore,
 } from "@/lib/actions";
 import { formatPhone } from "@/lib/phone";
+import { CallButton } from "@/components/CallButton";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { ScoreBadge } from "@/components/ScoreBadge";
 import { LocationBadge } from "@/components/LocationBadge";
@@ -306,7 +307,16 @@ export default async function ContactsPage({
                         <LocationBadge match={c.locationMatch} region={c.locationRegion} />
                       </div>
                     </td>
-                    <td className="px-3 py-2 font-mono text-xs">{formatPhone(c.phone)}</td>
+                    <td className="px-3 py-2 font-mono text-xs">
+                      <span className="inline-flex items-center gap-1">
+                        {formatPhone(c.phone)}
+                        <CallButton
+                          phone={c.phone}
+                          name={[c.firstName, c.lastName].filter(Boolean).join(" ")}
+                          company={c.company}
+                        />
+                      </span>
+                    </td>
                     <td className="px-3 py-2">{c.company ?? <span className="text-zinc-400">-</span>}</td>
                     <td className="px-3 py-2">{c.jobTitle ?? <span className="text-zinc-400">-</span>}</td>
                     <td className="px-3 py-2">

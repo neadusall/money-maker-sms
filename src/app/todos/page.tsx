@@ -3,6 +3,7 @@ import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "@/db/client";
 import { todos, contacts, campaigns, type TodoChannel } from "@/db/schema";
 import { completeTodo, reopenTodo, deleteTodo, toggleCandidateReviewed } from "@/lib/actions";
+import { CallButton } from "@/components/CallButton";
 import { DeleteCorrespondenceButton } from "@/components/DeleteCorrespondenceButton";
 import { DownloadListButton } from "@/components/DownloadListButton";
 import { ScoreBadge } from "@/components/ScoreBadge";
@@ -77,6 +78,8 @@ export default async function TodosPage({
       contactId: string;
       name: string;
       sub: string;
+      phone: string;
+      company: string | null;
       campaignId: string;
       conversationId: string | null;
       linkedin: string;
@@ -103,6 +106,8 @@ export default async function TodosPage({
         contactId: r.contactId,
         name,
         sub,
+        phone: r.phone,
+        company: r.company,
         campaignId: r.campaignId,
         conversationId: r.conversationId,
         linkedin: li.url,
@@ -229,6 +234,7 @@ export default async function TodosPage({
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
+                  <CallButton phone={g.phone} name={g.name} company={g.company} variant="pill" />
                   <a
                     href={g.linkedin}
                     target="_blank"
