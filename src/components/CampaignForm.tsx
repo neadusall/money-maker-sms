@@ -115,11 +115,11 @@ export function CampaignForm({
           reopens.
         </p>
         <Field
-          label="Schedule send (optional)"
+          label="Send date & time (required before anything sends)"
           name="scheduledAt"
           type="datetime-local"
           defaultValue={campaign?.scheduledAt ? toLocalInput(campaign.scheduledAt) : ""}
-          help={`Pick a date and time (${APP_TZ}) to start this campaign automatically. Leave blank to start it yourself with the Launch button. Sending still respects the send window above.`}
+          help={`Texting starts only at this date and time (${APP_TZ}), inside the send window above. Without it the campaign never sends, no matter how it was created. Contacts added after this time are held until you set a new one (or click Send). Clear it and save to stop upcoming sends.`}
         />
         <Field
           label="LinkedIn Sales Navigator search link (optional)"

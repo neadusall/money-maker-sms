@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, lte, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { campaigns, contacts, conversations, messages, scheduledMessages } from "@/db/schema";
 import { lookupLineType, sendSms } from "./telnyx";
@@ -174,6 +174,7 @@ export async function runScoreBatch(campaignId: string): Promise<ScoreBatchResul
 export type SendBatchResult =
   | { state: "gone" }
   | { state: "stopped"; status: string }
+  | { state: "unscheduled" }
   | { state: "waiting_schedule"; waitSeconds: number }
   | { state: "waiting_window"; waitSeconds: number }
   | { state: "waiting_scores"; unscored: number }
@@ -190,13 +191,14 @@ export async function runSendBatch(campaignId: string, limit = SEND_BATCH): Prom
   // Stop sending if the campaign was paused / set back to draft (e.g. list cleared).
   if (campaign.status !== "active") return { state: "stopped", status: campaign.status };
 
-  // Honor a one-time schedule: wait until the scheduled moment, then clear it so
-  // this gate stops firing and sending proceeds.
-  if (campaign.scheduledAt && campaign.scheduledAt.getTime() > Date.now()) {
+  // FAIL-SAFE: nothing ever sends without a send date & time a human set inside
+  // OS Text (the Schedule field, or the Send button which stamps "now"). No
+  // schedule = no sending, no matter how the campaign became active (Activate
+  // click, portal push, top-up of an old campaign, background sweeper). The
+  // schedule is kept after it fires: it doubles as the approval cutoff below.
+  if (!campaign.scheduledAt) return { state: "unscheduled" };
+  if (campaign.scheduledAt.getTime() > Date.now()) {
     return { state: "waiting_schedule", waitSeconds: clampWait(campaign.scheduledAt.getTime() - Date.now()) };
-  }
-  if (campaign.scheduledAt) {
-    await db.update(campaigns).set({ scheduledAt: null }).where(eq(campaigns.id, campaignId));
   }
 
   // Respect the send window — outside it, report when it opens.
@@ -211,6 +213,8 @@ export async function runSendBatch(campaignId: string, limit = SEND_BATCH): Prom
   // Score-first: when no fit threshold is set, never text contacts that haven't
   // been scored yet — wait for background scoring to finish first. (With a
   // threshold set, unscored contacts are already excluded by the query below.)
+  // Scoped to the approved cutoff so a late-pushed (held) contact can't stall
+  // the batch the recruiter actually scheduled.
   if (!minScore) {
     const [{ unscored }] = await db
       .select({ unscored: sql<number>`count(*)::int` })
@@ -220,6 +224,7 @@ export async function runSendBatch(campaignId: string, limit = SEND_BATCH): Prom
           eq(contacts.campaignId, campaignId),
           eq(contacts.status, "pending"),
           eq(contacts.optedOut, false),
+          lte(contacts.createdAt, campaign.scheduledAt),
           sql`${contacts.qualificationScore} is null`,
         ),
       );
@@ -231,6 +236,10 @@ export async function runSendBatch(campaignId: string, limit = SEND_BATCH): Prom
     eq(contacts.status, "pending"),
     eq(contacts.optedOut, false),
     isNull(contacts.deletedAt),
+    // Approval cutoff: only contacts that were in the campaign when the recruiter
+    // set the send date & time. Anyone pushed/uploaded AFTER that moment is held
+    // until a human sets a new date & time (or clicks Send, which stamps "now").
+    lte(contacts.createdAt, campaign.scheduledAt),
     minScore ? sql`${contacts.qualificationScore} >= ${minScore}` : undefined,
   );
 

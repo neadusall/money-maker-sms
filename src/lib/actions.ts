@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { and, eq, isNull, ne, desc, sql, inArray } from "drizzle-orm";
+import { and, eq, isNull, lte, ne, desc, sql, inArray } from "drizzle-orm";
 import { db } from "@/db/client";
 import {
   campaigns,
@@ -526,6 +526,14 @@ export async function sendCampaignBatch(campaignId: string): Promise<void> {
   const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId));
   if (!campaign) throw new Error("Campaign not found");
 
+  // FAIL-SAFE: same rule as the automated drain: no human-set send date & time,
+  // no sending. startCampaignSend stamps "now" on an explicit Send click.
+  if (!campaign.scheduledAt || campaign.scheduledAt.getTime() > Date.now()) {
+    console.warn(`[sendCampaignBatch ${campaignId}] no send date & time due; refusing to send`);
+    revalidatePath(`/campaigns/${campaignId}`);
+    return;
+  }
+
   const window = isWithinSendWindow(campaign.sendWindowStart, campaign.sendWindowEnd);
   if (!window.ok) {
     console.warn(
@@ -546,6 +554,8 @@ export async function sendCampaignBatch(campaignId: string): Promise<void> {
         eq(contacts.status, "pending"),
         eq(contacts.optedOut, false),
         isNull(contacts.deletedAt),
+        // Approval cutoff: only contacts present when the send time was set.
+        lte(contacts.createdAt, campaign.scheduledAt),
         minScore ? sql`${contacts.qualificationScore} >= ${minScore}` : undefined,
       ),
     )
@@ -598,7 +608,13 @@ export async function startCampaignSend(campaignId: string): Promise<void> {
     return;
   }
 
-  await db.update(campaigns).set({ status: "active", updatedAt: new Date() }).where(eq(campaigns.id, campaignId));
+  // An explicit Send click IS the human approval: stamp the send time as "now"
+  // so the fail-safe gate opens for everyone currently in the campaign. Contacts
+  // pushed in later still wait for the next explicit schedule/Send.
+  await db
+    .update(campaigns)
+    .set({ status: "active", scheduledAt: new Date(), updatedAt: new Date() })
+    .where(eq(campaigns.id, campaignId));
 
   if (isQStashConfigured()) {
     // Kick off a self-continuing drain that sends every pending contact, paced.

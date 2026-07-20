@@ -3,7 +3,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db/client";
 import { campaigns, contacts, suppressedNumbers } from "@/db/schema";
 import { normalizePhone } from "@/lib/phone";
-import { isQStashConfigured, enqueueValidationDrain, enqueueScoreDrain, enqueueCampaignDrain } from "@/lib/schedule";
+import { isQStashConfigured, enqueueValidationDrain, enqueueScoreDrain } from "@/lib/schedule";
 import { kickSoon } from "@/lib/internal-clock";
 
 export const dynamic = "force-dynamic";
@@ -63,10 +63,6 @@ interface ImportBody {
     /** The pushing recruiter's assigned phone line (E.164): the campaign texts
      *  from the same number that recruiter calls from. */
     fromNumber?: string;
-    /** Create the campaign already ACTIVE: once validation + scoring drain, it
-     *  texts on its own inside the send window, with no Activate click. Off by
-     *  default so pushed campaigns stay human-launched. */
-    autoStart?: boolean;
   };
   contacts?: ImportContact[];
   validate?: boolean;
@@ -135,13 +131,15 @@ export async function POST(req: Request) {
     .where(eq(campaigns.name, name))
     .orderBy(desc(campaigns.createdAt))
     .limit(1);
-  const autoStart = body.campaign?.autoStart === true;
   if (!campaign) {
+    // ALWAYS draft. There is deliberately no way to create or launch a sending
+    // campaign through this API: sending starts only after a human sets a send
+    // date & time inside OS Text (and the sender itself enforces that too).
     [campaign] = await db
       .insert(campaigns)
       .values({
         name,
-        status: autoStart ? "active" : "draft",
+        status: "draft",
         smsTemplate: clean(body.campaign?.smsTemplate) ?? DEFAULT_TEMPLATE(name),
         positionSummary: clean(body.campaign?.positionSummary),
         recruiterName: clean(body.campaign?.recruiterName),
@@ -219,22 +217,13 @@ export async function POST(req: Request) {
     added += inserted.length;
   }
 
-  // A top-up push with autoStart also (re)launches a still-draft campaign.
-  if (autoStart && campaign.status === "draft") {
-    [campaign] = await db
-      .update(campaigns)
-      .set({ status: "active", updatedAt: new Date() })
-      .where(eq(campaigns.id, campaign.id))
-      .returning();
-  }
-
-  if (added > 0 || autoStart) {
+  if (added > 0) {
     if (isQStashConfigured()) {
-      if (validate && added > 0) await enqueueValidationDrain(campaign.id, 1);
-      if (added > 0) await enqueueScoreDrain(campaign.id, 3);
-      if (autoStart) await enqueueCampaignDrain(campaign.id, 5);
+      if (validate) await enqueueValidationDrain(campaign.id, 1);
+      await enqueueScoreDrain(campaign.id, 3);
     } else {
-      // Self-hosted: the internal clock sweeps validation, scoring, and sending.
+      // Self-hosted: the internal clock sweeps validation and scoring. Sending
+      // is untouched here: it requires a human-set send date & time in OS Text.
       kickSoon();
     }
   }

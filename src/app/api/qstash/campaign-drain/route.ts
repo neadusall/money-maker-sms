@@ -29,6 +29,12 @@ export async function POST(request: Request) {
     console.log(`[campaign-drain ${campaignId}] campaign is ${r.status}; stopping`);
     return NextResponse.json({ ok: true, note: `campaign ${r.status}; stopped` });
   }
+  if (r.state === "unscheduled") {
+    // Fail-safe: no human-set send date & time. Do NOT re-enqueue; scheduling
+    // (or the Send button) kicks a fresh drain when a human approves it.
+    console.log(`[campaign-drain ${campaignId}] no send date & time set; holding`);
+    return NextResponse.json({ ok: true, note: "no send schedule set; holding" });
+  }
   if (r.state === "waiting_schedule") {
     await enqueueCampaignDrain(campaignId, r.waitSeconds);
     return NextResponse.json({ ok: true, note: "scheduled for future; re-enqueued", retryInSeconds: r.waitSeconds });

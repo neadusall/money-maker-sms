@@ -137,8 +137,10 @@ async function sweep(): Promise<void> {
         const r = await runSendBatch(id);
         if (r.state === "ran" && (r.sent || r.failed || r.skipped)) {
           console.log(`[clock send ${id}] sent=${r.sent} failed=${r.failed} skipped=${r.skipped} remaining=${r.remaining}`);
-        } else if (r.state === "waiting_window" || r.state === "waiting_schedule") {
+        } else if (r.state === "waiting_window" || r.state === "waiting_schedule" || r.state === "unscheduled") {
           // Quiet: the next sweep re-checks; no need to log every 30s all night.
+          // ("unscheduled" = active but no human-set send date & time: the
+          // fail-safe holds it, and the campaign page tells the recruiter.)
         } else if (r.state === "waiting_scores") {
           console.log(`[clock send ${id}] waiting on fit scoring (${r.unscored} unscored)`);
         }

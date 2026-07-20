@@ -100,6 +100,26 @@ export default async function CampaignDetail({
   const scheduledFuture =
     campaign.scheduledAt && campaign.scheduledAt.getTime() > Date.now() ? campaign.scheduledAt : null;
 
+  // Fail-safe visibility: without a human-set send date & time nothing sends,
+  // and contacts added AFTER the last set time are held until a new one is set.
+  const unscheduled = !campaign.scheduledAt;
+  let heldNew = 0;
+  if (campaign.scheduledAt && !scheduledFuture) {
+    const [row] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(contacts)
+      .where(
+        and(
+          eq(contacts.campaignId, id),
+          sql`${contacts.status} = 'pending'`,
+          eq(contacts.optedOut, false),
+          sql`${contacts.deletedAt} is null`,
+          sql`${contacts.createdAt} > ${campaign.scheduledAt}`,
+        ),
+      );
+    heldNew = row?.n ?? 0;
+  }
+
   return (
     <section className="grid gap-6">
       <AutoRefresh intervalMs={8000} />
@@ -182,8 +202,8 @@ export default async function CampaignDetail({
             <button
               title={
                 campaign.status === "draft"
-                  ? "Starts this campaign: numbers get cell-checked and fit-scored, then texting begins on its own inside the send window"
-                  : "Resumes sending where the campaign left off"
+                  ? "Prepares this campaign: numbers get cell-checked and fit-scored. Nothing is texted until you set a send date & time below (or click Send)."
+                  : "Reactivates the campaign. Texting still requires a send date & time set below."
               }
               className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
             >
@@ -221,6 +241,34 @@ export default async function CampaignDetail({
           <DeleteCampaignButton deleteAction={del} />
         </div>
       </div>
+
+      {unscheduled && qualifying + unscored + (stats?.validating ?? 0) > 0 ? (
+        <div className="flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          <svg className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+          </svg>
+          <span>
+            <strong>No send date &amp; time set: nothing will be texted.</strong>{" "}
+            This campaign never sends on its own.
+            Set a send date &amp; time in the settings below and save to schedule it, or click Send to text the ready
+            contacts now. Cell-checking and fit scoring run in the meantime so the list is ready when you are.
+          </span>
+        </div>
+      ) : null}
+
+      {heldNew > 0 ? (
+        <div className="flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          <svg className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+          </svg>
+          <span>
+            <strong>
+              {heldNew} contact{heldNew === 1 ? " was" : "s were"} added after the last scheduled send and {heldNew === 1 ? "is" : "are"} held.
+            </strong>{" "}
+            New arrivals never text automatically. Set a new send date &amp; time below (or click Send) to release them.
+          </span>
+        </div>
+      ) : null}
 
       {scheduledFuture ? (
         <div className="flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-900">
@@ -278,7 +326,7 @@ export default async function CampaignDetail({
         <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
           <strong>You&apos;re adding to a campaign that already ran.</strong> Send texts only the {qualifying} unsent
           contact{qualifying === 1 ? "" : "s"}
-          {bar > 0 ? ` scoring ≥ ${bar}` : ""}: the {stats?.sent} you&apos;ve already messaged are skipped, so nobody
+          {bar > 0 ? ` scoring ≥ ${bar}` : ""}: the {stats?.sent}{" "}you&apos;ve already messaged are skipped, so nobody
           is texted twice.
         </div>
       ) : null}
