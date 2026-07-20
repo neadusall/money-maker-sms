@@ -21,6 +21,8 @@ export default async function Dashboard() {
       status: campaigns.status,
       llmMode: campaigns.llmMode,
       createdAt: campaigns.createdAt,
+      recruiterName: campaigns.recruiterName,
+      recruiterEmail: campaigns.recruiterEmail,
     })
     .from(campaigns)
     .orderBy(desc(campaigns.createdAt));
@@ -218,6 +220,7 @@ export default async function Dashboard() {
                         ) : null}
                       </Link>
                       <StatusBadge status={c.status} />
+                      <OwnerChip name={c.recruiterName} email={c.recruiterEmail} />
                     </div>
                     <div className="mt-0.5 text-xs text-zinc-400">
                       {new Date(c.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
@@ -248,6 +251,51 @@ export default async function Dashboard() {
         </>
       )}
     </section>
+  );
+}
+
+// Stable chip colors per owner so the same recruiter always scans the same at a glance.
+const OWNER_COLORS = [
+  "bg-sky-100 text-sky-800",
+  "bg-violet-100 text-violet-800",
+  "bg-emerald-100 text-emerald-800",
+  "bg-amber-100 text-amber-800",
+  "bg-rose-100 text-rose-800",
+  "bg-teal-100 text-teal-800",
+  "bg-indigo-100 text-indigo-800",
+];
+
+function OwnerChip({ name, email }: { name: string | null; email: string | null }) {
+  const cleanName = (name ?? "").trim();
+  const cleanEmail = (email ?? "").trim();
+  const label = cleanName || cleanEmail.split("@")[0];
+  if (!label) {
+    return (
+      <span className="inline-flex shrink-0 items-center rounded-full border border-dashed border-zinc-300 px-2 py-0.5 text-[11px] font-medium text-zinc-400">
+        Unassigned
+      </span>
+    );
+  }
+  let hash = 0;
+  for (let i = 0; i < label.length; i++) hash = (hash * 31 + label.charCodeAt(i)) >>> 0;
+  const color = OWNER_COLORS[hash % OWNER_COLORS.length];
+  const initials = label
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => w[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+  return (
+    <span
+      title={cleanEmail ? `Owner: ${cleanEmail}` : `Owner: ${label}`}
+      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full py-0.5 pl-0.5 pr-2 text-[11px] font-medium ${color}`}
+    >
+      <span className="flex h-4 w-4 items-center justify-center rounded-full bg-white/80 text-[9px] font-bold">
+        {initials}
+      </span>
+      {label}
+    </span>
   );
 }
 
