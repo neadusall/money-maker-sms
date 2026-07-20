@@ -85,12 +85,6 @@ function snippet(text: string, max = 120): string {
   return clean.length <= max ? clean : `${clean.slice(0, max - 3)}...`;
 }
 
-function inboxLink(campaignId: string, conversationId: string): string | null {
-  const base = process.env.PUBLIC_APP_URL ?? process.env.AUTH_URL;
-  if (!base) return null;
-  return `${base.replace(/\/+$/, "")}/campaigns/${campaignId}/inbox/${conversationId}`;
-}
-
 async function deliver(args: {
   recipients: string[];
   body: string;
@@ -157,11 +151,11 @@ export async function recordReplyAlert(args: {
     Date.now() - existing.lastAlertAt.getTime() < IMMEDIATE_DEBOUNCE_MS;
   if (recentlyAlerted) return;
 
-  const link = inboxLink(campaign.id, conversationId);
+  // No links or platform names in the alert: just who replied and what they
+  // said, so the text can never leak a tool URL.
   const body =
-    `New OS Text reply: ${candidateName(contact)} (${campaign.name}) said "${snippet(inboundBody)}". ` +
-    `They are waiting on you. Get in the tool and respond.` +
-    (link ? ` ${link}` : "");
+    `New reply: ${candidateName(contact)} (${campaign.name}) said "${snippet(inboundBody)}". ` +
+    `They are waiting on you. Get in the tool and respond.`;
 
   const sent = await deliver({ recipients, body, fromNumber: campaign.fromNumber });
   if (sent) {
@@ -240,11 +234,9 @@ export async function sweepReplyAlerts(): Promise<{ nagged: number; resolved: nu
     }
 
     const mins = Math.max(1, Math.round((Date.now() - alert.lastInboundAt.getTime()) / 60_000));
-    const link = inboxLink(campaign.id, convo.id);
     const body =
-      `OS Text reminder: ${candidateName(contact)} (${campaign.name}) replied ${mins} min ago ` +
-      `and still has no response from you. Get in the tool and reply.` +
-      (link ? ` ${link}` : "");
+      `Reminder: ${candidateName(contact)} (${campaign.name}) replied ${mins} min ago ` +
+      `and still has no response from you. Get in the tool and reply.`;
 
     const sent = await deliver({ recipients, body, fromNumber: campaign.fromNumber });
     if (sent) {
