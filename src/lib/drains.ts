@@ -3,6 +3,7 @@ import { db } from "@/db/client";
 import { campaigns, contacts, conversations, messages, scheduledMessages } from "@/db/schema";
 import { lookupLineType, sendSms } from "./telnyx";
 import { isAlwaysAllowed } from "./always-allow";
+import { recordPhoneCheck } from "./phone-accuracy";
 import { processContactSend } from "./send";
 import { isWithinSendWindow } from "./send-window";
 import { scoreCandidatesBatch } from "./qualify";
@@ -71,6 +72,16 @@ export async function runValidateBatch(campaignId: string): Promise<ValidateBatc
     } catch {
       lineType = "unknown";
     }
+    // Phone-accuracy ledger: a failed number's contact row is deleted below, so
+    // the verdict (and the source that supplied the number) is recorded FIRST.
+    // Best-effort: bookkeeping must never block validation.
+    await recordPhoneCheck({
+      campaignId,
+      phone: contact.phone,
+      phoneSource: contact.customFields?.phone_source ?? null,
+      lineType,
+      kept: lineType === "mobile",
+    }).catch(() => {});
     // Strict: keep ONLY confirmed mobile numbers. Everything else (landline,
     // toll-free, VoIP, or unverifiable) is removed.
     if (lineType === "mobile") {
