@@ -3,6 +3,7 @@ import { db } from "@/db/client";
 import { campaigns, contacts, scheduledMessages } from "@/db/schema";
 import { isQStashConfigured } from "./schedule";
 import { runValidateBatch, runScoreBatch, runSendBatch, dispatchScheduledMessage } from "./drains";
+import { sweepReplyAlerts } from "./reply-alerts";
 
 /**
  * The in-process clock: the self-hosted replacement for QStash.
@@ -162,6 +163,18 @@ async function sweep(): Promise<void> {
       } catch (err) {
         console.error(`[clock reply ${id}]`, err);
       }
+    }
+    // 5. Recruiter reply alerts: re-text the recruiter's cell for every
+    // candidate reply still unanswered past the nag interval, retire alerts
+    // that got a human response. Also delivers any first alert whose instant
+    // send failed.
+    try {
+      const r = await sweepReplyAlerts();
+      if (r.nagged || r.resolved) {
+        console.log(`[clock reply-alerts] nagged=${r.nagged} resolved=${r.resolved}`);
+      }
+    } catch (err) {
+      console.error("[clock reply-alerts]", err);
     }
   } catch (err) {
     // One bad sweep must never kill the clock.

@@ -358,6 +358,33 @@ export const todos = pgTable(
   }),
 );
 
+// One row per conversation with an unanswered candidate reply: drives the
+// recruiter cell-phone alerts (instant text on reply, then a nag every
+// OSTEXT_ALERT_NAG_MINUTES until the recruiter responds in the thread).
+export const replyAlerts = pgTable(
+  "reply_alerts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    conversationId: uuid("conversation_id")
+      .references(() => conversations.id, { onDelete: "cascade" })
+      .notNull()
+      .unique("reply_alerts_conversation_unique"),
+
+    // When the candidate's latest unanswered message arrived. A recruiter
+    // outbound after this moment (with human takeover) resolves the alert.
+    lastInboundAt: timestamp("last_inbound_at", { withTimezone: true }).notNull(),
+
+    lastAlertAt: timestamp("last_alert_at", { withTimezone: true }),
+    alertCount: integer("alert_count").default(0).notNull(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    openIdx: index("reply_alerts_open_idx").on(t.resolvedAt, t.lastAlertAt),
+  }),
+);
+
 export const usageEvents = pgTable(
   "usage_events",
   {
@@ -435,6 +462,7 @@ export type Message = typeof messages.$inferSelect;
 export type ScheduledMessage = typeof scheduledMessages.$inferSelect;
 export type SuppressedNumber = typeof suppressedNumbers.$inferSelect;
 export type Todo = typeof todos.$inferSelect;
+export type ReplyAlert = typeof replyAlerts.$inferSelect;
 export type NewTodo = typeof todos.$inferInsert;
 export type TodoChannel = (typeof todoChannel.enumValues)[number];
 export type ClassificationLabel = (typeof classificationLabel.enumValues)[number];

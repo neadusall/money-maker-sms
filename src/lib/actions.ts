@@ -31,6 +31,7 @@ import { sendSms } from "./telnyx";
 import { processContactSend } from "./send";
 import { normalizePhone } from "./phone";
 import { isStopKeyword } from "./opt-out";
+import { recordReplyAlert } from "./reply-alerts";
 import { classifyReply, isAutoSendCandidate, isAutoIgnoreNegative } from "./classify";
 import { draftReply } from "./draft-reply";
 import { paceForNextSend } from "./pacing";
@@ -732,6 +733,18 @@ export async function recordInbound(args: {
       unreadCount: sql`${conversations.unreadCount}::int + 1` as unknown as string,
     })
     .where(eq(conversations.id, convo.id));
+
+  // Text the recruiter's cell right away (and re-nag on the clock until they
+  // respond to this candidate from the inbox). Best-effort.
+  await recordReplyAlert({
+    campaign,
+    contact,
+    conversationId: convo.id,
+    inboundBody: args.body,
+    inboundAt: inserted.createdAt,
+  }).catch((err) => {
+    console.error("[recordInbound] reply alert failed:", err);
+  });
 
   // If the candidate replied with an email address, auto-send the full position
   // details (subject = role title, body = position summary) from the configured

@@ -20,6 +20,10 @@ export async function sendSms(args: {
   to: string;
   body: string;
   from?: string;
+  // Internal notifications to our own recruiters: skip the candidate-facing
+  // opt-out footer (a STOP instruction on an internal alert invites the
+  // recruiter to opt their own cell out of the platform).
+  internal?: boolean;
 }): Promise<SendResult> {
   const profileId = process.env.TELNYX_MESSAGING_PROFILE_ID;
   const from = args.from ?? process.env.TELNYX_FROM_NUMBER;
@@ -29,7 +33,7 @@ export async function sendSms(args: {
   try {
     const res = await client().messages.send({
       to: args.to,
-      text: withOptOut(args.body),
+      text: args.internal ? args.body : withOptOut(args.body),
       ...(from ? { from } : {}),
       ...(profileId ? { messaging_profile_id: profileId } : {}),
     });
