@@ -80,6 +80,16 @@ function candidateName(contact: Contact): string {
   return [contact.firstName, contact.lastName].filter(Boolean).join(" ") || contact.phone;
 }
 
+/** "5 min" / "3 hours" / "2 days": how long the candidate has been waiting. */
+function waitingLabel(sinceMs: number): string {
+  const mins = Math.max(1, Math.round(sinceMs / 60_000));
+  if (mins < 60) return `${mins} min`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return hours === 1 ? "1 hour" : `${hours} hours`;
+  const days = Math.round(hours / 24);
+  return days === 1 ? "1 day" : `${days} days`;
+}
+
 function snippet(text: string, max = 120): string {
   const clean = text.replace(/\s+/g, " ").trim();
   return clean.length <= max ? clean : `${clean.slice(0, max - 3)}...`;
@@ -233,9 +243,8 @@ export async function sweepReplyAlerts(): Promise<{ nagged: number; resolved: nu
       continue;
     }
 
-    const mins = Math.max(1, Math.round((Date.now() - alert.lastInboundAt.getTime()) / 60_000));
     const body =
-      `Reminder: ${candidateName(contact)} (${campaign.name}) replied ${mins} min ago ` +
+      `Reminder: ${candidateName(contact)} (${campaign.name}) replied ${waitingLabel(Date.now() - alert.lastInboundAt.getTime())} ago ` +
       `and still has no response from you. Get in the tool and reply.`;
 
     const sent = await deliver({ recipients, body, fromNumber: campaign.fromNumber });
