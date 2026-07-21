@@ -16,11 +16,12 @@ import { normalizePhone } from "./phone";
  * Recruiter cell-phone alerts for candidate replies.
  *
  * The moment a candidate texts back, the campaign's recruiter gets an SMS on
- * their personal cell ("get in the tool and respond"), and then ONE reminder
+ * their personal cell ("get in the tool and respond"), then one reminder
  * OSTEXT_ALERT_NAG_MINUTES later (default 30) if they still haven't replied
- * from the inbox. After that single reminder the alert goes quiet; a new
- * message from the candidate starts a fresh cycle. A human reply, closing the
- * conversation, or a candidate opt-out also retires the alert.
+ * from the inbox, then one final reminder OSTEXT_ALERT_FINAL_HOURS after that
+ * (default 24h) if there is still no reply. After that the alert goes quiet;
+ * a new message from the candidate starts a fresh cycle. A human reply,
+ * closing the conversation, or a candidate opt-out also retires the alert.
  *
  * Recipients per alert:
  *   - OSTEXT_ALERT_ALWAYS_CELL: one cell that gets EVERY alert regardless of
@@ -187,14 +188,20 @@ export async function recordReplyAlert(args: {
 }
 
 /**
- * Clock sweep: send the single follow-up reminder for alerts still unanswered
- * after the nag interval, and retire alerts that got a human reply (or whose
- * conversation was closed / opted out). Also catches alerts whose instant
- * text failed to send (lastAlertAt null). Each cycle sends at most
- * MAX_SENDS_PER_CYCLE texts total (instant alert + one reminder); once the
- * cap is hit the alert is retired quietly.
+ * Clock sweep: send the follow-up reminders for alerts still unanswered, and
+ * retire alerts that got a human reply (or whose conversation was closed /
+ * opted out). Also catches alerts whose instant text failed to send
+ * (lastAlertAt null). Each cycle sends at most MAX_SENDS_PER_CYCLE texts:
+ * the instant alert, one reminder after the nag interval (default 30 min),
+ * and one final reminder OSTEXT_ALERT_FINAL_HOURS after that (default 24h)
+ * if the recruiter still hasn't replied. Then the alert retires quietly.
  */
-const MAX_SENDS_PER_CYCLE = 2;
+const MAX_SENDS_PER_CYCLE = 3;
+
+function finalReminderMs(): number {
+  const h = Number(process.env.OSTEXT_ALERT_FINAL_HOURS);
+  return (Number.isFinite(h) && h >= 1 ? h : 24) * 3_600_000;
+}
 export async function sweepReplyAlerts(): Promise<{ nagged: number; resolved: number }> {
   const cutoff = new Date(Date.now() - nagMinutes() * 60_000);
   const due = await db
@@ -248,10 +255,21 @@ export async function sweepReplyAlerts(): Promise<{ nagged: number; resolved: nu
       }
     }
 
-    // Reminder already sent (instant + one follow-up): go quiet. A new
-    // candidate message re-opens the alert with a fresh cycle.
+    // All sends done (instant + 30-min reminder + 24h final reminder): go
+    // quiet. A new candidate message re-opens the alert with a fresh cycle.
     if (alert.alertCount >= MAX_SENDS_PER_CYCLE) {
       await retire();
+      continue;
+    }
+
+    // The last send of a cycle waits the long interval: after the 30-min
+    // reminder, hold off OSTEXT_ALERT_FINAL_HOURS before the final text.
+    const isFinal = alert.alertCount === MAX_SENDS_PER_CYCLE - 1;
+    if (
+      isFinal &&
+      alert.lastAlertAt &&
+      Date.now() - alert.lastAlertAt.getTime() < finalReminderMs()
+    ) {
       continue;
     }
 
@@ -263,7 +281,7 @@ export async function sweepReplyAlerts(): Promise<{ nagged: number; resolved: nu
     }
 
     const body =
-      `Reminder: ${candidateName(contact)} (${campaign.name}) replied ${waitingLabel(Date.now() - alert.lastInboundAt.getTime())} ago ` +
+      `${isFinal ? "Final reminder" : "Reminder"}: ${candidateName(contact)} (${campaign.name}) replied ${waitingLabel(Date.now() - alert.lastInboundAt.getTime())} ago ` +
       `and still has no response from you. Get in the tool and reply.`;
 
     const sent = await deliver({ recipients, body, fromNumber: campaign.fromNumber });
