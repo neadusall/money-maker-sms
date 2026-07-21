@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { phoneAccuracyBySource } from "@/lib/phone-accuracy";
+import { phoneAccuracyBySource, phoneAccuracyTrend } from "@/lib/phone-accuracy";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -28,8 +28,13 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "invalid or missing token" }, { status: 403 });
   }
   try {
-    const sources = await phoneAccuracyBySource();
-    return NextResponse.json({ ok: true, sources });
+    const [sources, trend] = await Promise.all([
+      phoneAccuracyBySource(),
+      // The daily series behind the card's sparklines; a trend hiccup must not
+      // take down the scoreboard itself.
+      phoneAccuracyTrend(14).catch(() => []),
+    ]);
+    return NextResponse.json({ ok: true, sources, trend });
   } catch (err) {
     console.error("[phone-accuracy] stats failed:", err);
     return NextResponse.json({ error: "stats unavailable" }, { status: 500 });

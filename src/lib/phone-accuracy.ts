@@ -153,3 +153,49 @@ export async function phoneAccuracyBySource(): Promise<SourceAccuracy[]> {
   return Array.from(bySource.values()).sort((a, b) =>
     Number(a.source === "unknown") - Number(b.source === "unknown") || b.texted - a.texted || b.checked - a.checked);
 }
+
+export interface SourceTrendDay {
+  source: string;
+  /** Local day, YYYY-MM-DD. */
+  day: string;
+  texted: number;
+  delivered: number;
+  replied: number;
+  wrongNumber: number;
+}
+
+interface TrendRow extends Record<string, unknown> {
+  source: string;
+  day: string;
+  texted: number;
+  delivered: number;
+  replied: number;
+  wrong_number: number;
+}
+
+/** Daily per-source send/response series for the last `days` days (the live
+ *  trend under the accuracy scoreboard). */
+export async function phoneAccuracyTrend(days = 14): Promise<SourceTrendDay[]> {
+  const res = await db.execute<TrendRow>(
+    sql`SELECT COALESCE(ct.custom_fields->>'phone_source', 'unknown') AS source,
+               to_char(date_trunc('day', m.created_at), 'YYYY-MM-DD') AS day,
+               count(DISTINCT ct.id) FILTER (WHERE m.direction = 'outbound')::int AS texted,
+               count(DISTINCT ct.id) FILTER (WHERE m.direction = 'outbound' AND m.status = 'delivered')::int AS delivered,
+               count(DISTINCT ct.id) FILTER (WHERE m.direction = 'inbound')::int AS replied,
+               count(DISTINCT ct.id) FILTER (WHERE cv.classification = 'wrong_person' OR m.classification = 'wrong_person')::int AS wrong_number
+        FROM messages m
+        JOIN conversations cv ON cv.id = m.conversation_id
+        JOIN contacts ct ON ct.id = cv.contact_id
+        WHERE m.created_at >= now() - make_interval(days => ${days})
+        GROUP BY 1, 2
+        ORDER BY 2`,
+  );
+  return res.rows.map((r) => ({
+    source: r.source,
+    day: r.day,
+    texted: r.texted,
+    delivered: r.delivered,
+    replied: r.replied,
+    wrongNumber: r.wrong_number,
+  }));
+}
