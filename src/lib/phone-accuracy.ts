@@ -69,7 +69,7 @@ export async function recordPhoneCheck(o: PhoneCheckOutcome): Promise<void> {
 /**
  * The most recent Telnyx verdict per phone (true = confirmed cell), fresh
  * within `days`. A line type is a durable fact about the NUMBER, so /api/import
- * and the validation drain reuse it instead of buying a second lookup — this is
+ * and the validation drain reuse it instead of buying a second lookup: this is
  * what stops re-pushes from re-billing (and re-deleting) the same landlines.
  * Numbers can port, so verdicts expire after ~a quarter.
  */

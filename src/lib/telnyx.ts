@@ -51,7 +51,7 @@ export type LineType = "mobile" | "landline" | "voip" | "toll_free" | "unknown";
 /**
  * Look up a number's line type via Telnyx Number Lookup (carrier data).
  *
- * Returns a VERDICT about the number — "unknown" means Telnyx answered but
+ * Returns a VERDICT about the number: "unknown" means Telnyx answered but
  * could not class the line (or rejected the number itself as unroutable), and
  * the strict mobile-only rule may act on that. THROWS when Telnyx could not be
  * asked at all (network failure, rate limit, auth, 5xx): that is an outage,
