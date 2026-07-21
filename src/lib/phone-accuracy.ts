@@ -37,6 +37,15 @@ export function ensurePhoneCheckLedger(): Promise<void> {
           created_at timestamptz NOT NULL DEFAULT now()
         )`,
       )
+      // The verdict cache (latestPhoneVerdicts) hits this table on every import
+      // and every validation batch; without the index each hit is a full scan
+      // of an ever-growing ledger.
+      .then(() =>
+        db.execute(
+          sql`CREATE INDEX IF NOT EXISTS phone_check_outcomes_phone_created_idx
+              ON phone_check_outcomes (phone, created_at DESC)`,
+        ),
+      )
       .then(() => undefined)
       .catch((err) => {
         // Next attempt retries the create; callers treat recording as best-effort.
@@ -82,14 +91,20 @@ export async function latestPhoneVerdicts(phones: string[], days = 90): Promise<
   // named-arg params, and the driver-side binding failed at runtime, which the
   // callers' fail-open catch turned into a silent no-op cache.
   const cutoff = new Date(Date.now() - days * 24 * 3600_000).toISOString();
-  const list = sql.join(phones.map((p) => sql`${p}`), sql`, `);
-  const rows = await db.execute<{ phone: string; kept: boolean }>(
-    sql`SELECT DISTINCT ON (phone) phone, kept
-        FROM phone_check_outcomes
-        WHERE phone IN (${list}) AND created_at > ${cutoff}
-        ORDER BY phone, created_at DESC`,
-  );
-  for (const r of rows.rows) map.set(r.phone, r.kept);
+  // Chunked: /api/import accepts up to 25k contacts and each phone is one bind
+  // parameter; keep every query far from the driver's parameter ceiling.
+  const CHUNK = 1000;
+  for (let i = 0; i < phones.length; i += CHUNK) {
+    const slice = phones.slice(i, i + CHUNK);
+    const list = sql.join(slice.map((p) => sql`${p}`), sql`, `);
+    const rows = await db.execute<{ phone: string; kept: boolean }>(
+      sql`SELECT DISTINCT ON (phone) phone, kept
+          FROM phone_check_outcomes
+          WHERE phone IN (${list}) AND created_at > ${cutoff}
+          ORDER BY phone, created_at DESC`,
+    );
+    for (const r of rows.rows) map.set(r.phone, r.kept);
+  }
   return map;
 }
 

@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, lte, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { campaigns, contacts, conversations, messages, scheduledMessages } from "@/db/schema";
 import { lookupLineType, sendSms } from "./telnyx";
@@ -55,10 +55,14 @@ export async function runValidateBatch(campaignId: string): Promise<ValidateBatc
     return { held: "telnyx_key_missing", kept: 0, removed: 0, remaining };
   }
 
+  // Fresh contacts first: rows held back by a Telnyx outage carry a lastError
+  // stamp (below) and yield the batch to never-tried numbers, so a few
+  // persistently erroring rows can never starve a growing campaign.
   const batch = await db
     .select()
     .from(contacts)
     .where(and(eq(contacts.campaignId, campaignId), eq(contacts.status, "validating")))
+    .orderBy(sql`${contacts.lastError} IS NOT NULL`, contacts.id)
     .limit(VALIDATE_BATCH);
 
   // A line-type verdict is a fact about the NUMBER, not the campaign: when the
@@ -98,8 +102,15 @@ export async function runValidateBatch(campaignId: string): Promise<ValidateBatc
     } catch {
       // Telnyx could not be asked (outage, rate limit, auth): NOT a verdict.
       // Leave the contact "validating" (never textable) for the next tick to
-      // retry; deleting here would drop real cells on a blip. After a few
-      // failures assume Telnyx-wide trouble and stop hammering this tick.
+      // retry; deleting here would drop real cells on a blip. The lastError
+      // stamp pushes this row behind never-tried numbers in later batches.
+      // After a few failures assume Telnyx-wide trouble and stop hammering
+      // this tick.
+      await db
+        .update(contacts)
+        .set({ lastError: "cell check pending: Telnyx unreachable, will retry" })
+        .where(eq(contacts.id, contact.id))
+        .catch(() => {});
       heldError++;
       if (heldError >= 3) break;
       continue;
@@ -237,8 +248,11 @@ export async function runSendBatch(campaignId: string, limit = SEND_BATCH): Prom
   // FAIL-SAFE: nothing ever sends without a send date & time a human set inside
   // OS Text (the Schedule field, or the Send button which stamps "now"). No
   // schedule = no sending, no matter how the campaign became active (Activate
-  // click, portal push, top-up of an old campaign, background sweeper). The
-  // schedule is kept after it fires: it doubles as the approval cutoff below.
+  // click, portal push, top-up of an old campaign, background sweeper). Once it
+  // has fired on an ACTIVE campaign, that schedule is STANDING APPROVAL (user
+  // mandate 2026-07-21): contacts that arrive later (enrichment top-ups, Boost
+  // phones) validate, score, and send with the same setup, hands-free. Pause is
+  // the off switch; a paused/draft campaign holds everything.
   if (!campaign.scheduledAt) return { state: "unscheduled" };
   if (campaign.scheduledAt.getTime() > Date.now()) {
     return { state: "waiting_schedule", waitSeconds: clampWait(campaign.scheduledAt.getTime() - Date.now()) };
@@ -256,8 +270,8 @@ export async function runSendBatch(campaignId: string, limit = SEND_BATCH): Prom
   // Score-first: when no fit threshold is set, never text contacts that haven't
   // been scored yet — wait for background scoring to finish first. (With a
   // threshold set, unscored contacts are already excluded by the query below.)
-  // Scoped to the approved cutoff so a late-pushed (held) contact can't stall
-  // the batch the recruiter actually scheduled.
+  // Late-pushed contacts count here too: a top-up briefly pauses the batch
+  // until the scoring drain (same sweep) catches up, then everyone sends.
   if (!minScore) {
     const [{ unscored }] = await db
       .select({ unscored: sql<number>`count(*)::int` })
@@ -267,7 +281,6 @@ export async function runSendBatch(campaignId: string, limit = SEND_BATCH): Prom
           eq(contacts.campaignId, campaignId),
           eq(contacts.status, "pending"),
           eq(contacts.optedOut, false),
-          lte(contacts.createdAt, campaign.scheduledAt),
           sql`${contacts.qualificationScore} is null`,
         ),
       );
@@ -279,10 +292,11 @@ export async function runSendBatch(campaignId: string, limit = SEND_BATCH): Prom
     eq(contacts.status, "pending"),
     eq(contacts.optedOut, false),
     isNull(contacts.deletedAt),
-    // Approval cutoff: only contacts that were in the campaign when the recruiter
-    // set the send date & time. Anyone pushed/uploaded AFTER that moment is held
-    // until a human sets a new date & time (or clicks Send, which stamps "now").
-    lte(contacts.createdAt, campaign.scheduledAt),
+    // No created-at cutoff: the human-set schedule on this ACTIVE campaign is
+    // standing approval, so contacts pushed after it (enrichment top-ups, Boost
+    // phones) send automatically once cell-validated and scored. Every other
+    // gate above (status, schedule set + reached, send window, fit bar) still
+    // screens them like the original batch.
     minScore ? sql`${contacts.qualificationScore} >= ${minScore}` : undefined,
   );
 
