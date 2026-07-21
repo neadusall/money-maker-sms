@@ -153,6 +153,31 @@ export const campaigns = pgTable("campaigns", {
     .notNull(),
 });
 
+/**
+ * Saved campaign setups ("templates"): a recruiter saves a campaign they like
+ * once, then applies it to any new (usually pushed) campaign from a dropdown,
+ * so setup is two clicks + the send date & time. Deliberately NOT saved:
+ * name, fromNumber (the recruiter's own line), salesNavUrl, and scheduledAt
+ * (the send-date fail-safe must stay a per-campaign human decision).
+ */
+export const campaignTemplates = pgTable("campaign_templates", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  // Unique: re-saving under the same name updates the template in place.
+  name: text("name").notNull().unique(),
+  llmMode: llmMode("llm_mode").default("draft_only").notNull(),
+  smsTemplate: text("sms_template").notNull(),
+  positionSummary: text("position_summary"),
+  recruiterName: text("recruiter_name"),
+  recruiterEmail: text("recruiter_email"),
+  calendarLink: text("calendar_link"),
+  sendWindowStart: text("send_window_start").default("09:00").notNull(),
+  sendWindowEnd: text("send_window_end").default("19:00").notNull(),
+  targetRegion: text("target_region"),
+  minScoreToSend: integer("min_score_to_send"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const contacts = pgTable(
   "contacts",
   {
@@ -455,6 +480,7 @@ export const verificationTokens = pgTable(
 
 export type Campaign = typeof campaigns.$inferSelect;
 export type NewCampaign = typeof campaigns.$inferInsert;
+export type CampaignTemplate = typeof campaignTemplates.$inferSelect;
 export type Contact = typeof contacts.$inferSelect;
 export type NewContact = typeof contacts.$inferInsert;
 export type Conversation = typeof conversations.$inferSelect;

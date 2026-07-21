@@ -1,10 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
-import { campaigns, contacts, conversations } from "@/db/schema";
+import { campaigns, campaignTemplates, contacts, conversations, type CampaignTemplate } from "@/db/schema";
 import {
+  applyCampaignTemplate,
   deleteCampaign,
+  deleteCampaignTemplate,
+  saveCampaignTemplate,
   startCampaignSend,
   setCampaignStatus,
   updateCampaign,
@@ -83,6 +86,18 @@ export default async function CampaignDetail({
   const pause = setCampaignStatus.bind(null, id, "paused");
   const resume = setCampaignStatus.bind(null, id, "active");
   const del = deleteCampaign.bind(null, id);
+  const applyTpl = applyCampaignTemplate.bind(null, id);
+  const saveTpl = saveCampaignTemplate.bind(null, id);
+  const deleteTpl = deleteCampaignTemplate.bind(null, id);
+
+  // Saved campaign setups for the quick-setup dropdown. Tolerant of a missing
+  // table (mid-rollout): the page must never 500 over an optional convenience.
+  let templates: CampaignTemplate[] = [];
+  try {
+    templates = await db.select().from(campaignTemplates).orderBy(asc(campaignTemplates.name));
+  } catch {
+    templates = [];
+  }
 
   const pending = stats?.pending ?? 0;
   const qualifying = stats?.qualifying ?? 0;
@@ -344,6 +359,59 @@ export default async function CampaignDetail({
           <code>00:00</code>–<code>24:00</code> for all day) and save to send immediately.
         </div>
       ) : null}
+
+      <section className="rounded-xl border border-zinc-200 bg-surface p-4">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+          <span className="text-sm font-semibold text-zinc-900">Quick setup</span>
+          {templates.length > 0 ? (
+            <form action={applyTpl} className="flex flex-wrap items-center gap-2">
+              <select
+                name="templateId"
+                required
+                className="rounded-md border border-zinc-300 bg-surface px-3 py-1.5 text-sm shadow-sm focus:border-zinc-500 focus:outline-none"
+              >
+                {templates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+              <button className="rounded-md bg-ink px-3 py-1.5 text-sm font-medium text-white hover:bg-ink-soft">
+                Apply template
+              </button>
+              <button
+                formAction={deleteTpl}
+                title="Deletes the selected template (saved campaigns are not affected)"
+                className="rounded-md px-2 py-1.5 text-xs text-zinc-400 hover:text-rose-600"
+              >
+                Delete
+              </button>
+            </form>
+          ) : (
+            <span className="text-xs text-zinc-500">
+              No saved templates yet. Save this campaign&apos;s setup on the right and it appears here on every
+              campaign.
+            </span>
+          )}
+          <form action={saveTpl} className="ml-auto flex flex-wrap items-center gap-2">
+            <input
+              name="templateName"
+              required
+              defaultValue={campaign.name}
+              placeholder="Template name"
+              className="w-56 rounded-md border border-zinc-300 px-3 py-1.5 text-sm shadow-sm focus:border-zinc-500 focus:outline-none"
+            />
+            <button className="rounded-md border border-zinc-300 bg-surface px-3 py-1.5 text-sm font-medium hover:bg-zinc-50">
+              Save as template
+            </button>
+          </form>
+        </div>
+        <p className="mt-2 text-xs text-zinc-500">
+          Applying a template fills the message, job description, AI reply mode, send window, fit bar, and recruiter
+          details from a setup you saved. It never touches the send date &amp; time: nothing sends until you set that.
+          Saving with an existing template&apos;s name updates that template.
+        </p>
+      </section>
 
       {pending === 0 && (stats?.total ?? 0) === 0 ? (
         <div className="rounded-xl border border-dashed border-sky-300 bg-sky-50 p-4 text-sm text-sky-900">

@@ -6,6 +6,7 @@ import { and, eq, isNull, lte, ne, desc, sql, inArray } from "drizzle-orm";
 import { db } from "@/db/client";
 import {
   campaigns,
+  campaignTemplates,
   contacts,
   conversations,
   messages,
@@ -388,6 +389,73 @@ export async function setCampaignStatus(campaignId: string, status: "active" | "
     else kickSoon();
   }
   revalidatePath("/");
+  revalidatePath(`/campaigns/${campaignId}`);
+}
+
+/* ---------------- Campaign templates: save a setup once, deploy it fast ----------------
+ * A recruiter saves a campaign they like as a named template, then applies it to
+ * any new (usually pushed) campaign from a dropdown: setup becomes two clicks
+ * plus the send date & time. Applying a template NEVER touches name, status,
+ * fromNumber, salesNavUrl, or scheduledAt: the send-date fail-safe stays a
+ * per-campaign human decision, so applying a template can never start sending. */
+
+export async function saveCampaignTemplate(campaignId: string, formData: FormData): Promise<void> {
+  const name = (str(formData, "templateName") ?? "").slice(0, 120);
+  if (!name) return;
+  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId));
+  if (!campaign) return;
+  const values = {
+    name,
+    llmMode: campaign.llmMode,
+    smsTemplate: campaign.smsTemplate,
+    positionSummary: campaign.positionSummary,
+    recruiterName: campaign.recruiterName,
+    recruiterEmail: campaign.recruiterEmail,
+    calendarLink: campaign.calendarLink,
+    sendWindowStart: campaign.sendWindowStart,
+    sendWindowEnd: campaign.sendWindowEnd,
+    targetRegion: campaign.targetRegion,
+    minScoreToSend: campaign.minScoreToSend,
+  };
+  // Same name = update in place, so "save" is always safe to press again.
+  await db
+    .insert(campaignTemplates)
+    .values(values)
+    .onConflictDoUpdate({ target: campaignTemplates.name, set: { ...values, updatedAt: new Date() } });
+  revalidatePath(`/campaigns/${campaignId}`);
+}
+
+export async function applyCampaignTemplate(campaignId: string, formData: FormData): Promise<void> {
+  const templateId = str(formData, "templateId");
+  if (!templateId) return;
+  const [t] = await db.select().from(campaignTemplates).where(eq(campaignTemplates.id, templateId));
+  if (!t) return;
+  // Blank template fields never wipe values the campaign already has (e.g. the
+  // recruiter name a push filled in). A changed position summary invalidates the
+  // cached scoring rubric so future fit scores use the new role context.
+  await db
+    .update(campaigns)
+    .set({
+      llmMode: t.llmMode,
+      smsTemplate: t.smsTemplate,
+      sendWindowStart: t.sendWindowStart,
+      sendWindowEnd: t.sendWindowEnd,
+      ...(t.positionSummary ? { positionSummary: t.positionSummary, scoringRubric: null } : {}),
+      ...(t.recruiterName ? { recruiterName: t.recruiterName } : {}),
+      ...(t.recruiterEmail ? { recruiterEmail: t.recruiterEmail } : {}),
+      ...(t.calendarLink ? { calendarLink: t.calendarLink } : {}),
+      ...(t.targetRegion ? { targetRegion: t.targetRegion } : {}),
+      ...(t.minScoreToSend != null ? { minScoreToSend: t.minScoreToSend } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(campaigns.id, campaignId));
+  revalidatePath(`/campaigns/${campaignId}`);
+}
+
+export async function deleteCampaignTemplate(campaignId: string, formData: FormData): Promise<void> {
+  const templateId = str(formData, "templateId");
+  if (!templateId) return;
+  await db.delete(campaignTemplates).where(eq(campaignTemplates.id, templateId));
   revalidatePath(`/campaigns/${campaignId}`);
 }
 
