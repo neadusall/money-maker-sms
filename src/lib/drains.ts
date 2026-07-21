@@ -64,9 +64,10 @@ export async function runValidateBatch(campaignId: string): Promise<ValidateBatc
   // A line-type verdict is a fact about the NUMBER, not the campaign: when the
   // same number was already checked (another campaign, an earlier push), reuse
   // that verdict instead of buying a second Telnyx lookup.
-  const cachedVerdicts = await latestPhoneVerdicts(batch.map((c) => c.phone)).catch(
-    () => new Map<string, boolean>(),
-  );
+  const cachedVerdicts = await latestPhoneVerdicts(batch.map((c) => c.phone)).catch((err) => {
+    console.warn("[validate] verdict cache unavailable, doing live lookups:", err);
+    return new Map<string, boolean>();
+  });
 
   let kept = 0;
   let removed = 0;

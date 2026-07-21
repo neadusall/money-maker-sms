@@ -202,7 +202,12 @@ export async function POST(req: Request) {
   // confirmed cells land as "pending" without a second billed lookup.
   let verdicts = new Map<string, boolean>();
   if (validate && afterOptOut.length) {
-    verdicts = await latestPhoneVerdicts(afterOptOut.map((r) => r.phone)).catch(() => new Map());
+    // Fail-open (an unavailable cache must not block imports) but LOUD: a
+    // silent catch here once hid a broken query and re-enabled the churn.
+    verdicts = await latestPhoneVerdicts(afterOptOut.map((r) => r.phone)).catch((err) => {
+      console.warn("[import] verdict cache unavailable, validating everything:", err);
+      return new Map();
+    });
   }
   const knownNonMobile = validate
     ? afterOptOut.filter((r) => verdicts.get(r.phone) === false).length

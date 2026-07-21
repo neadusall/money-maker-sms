@@ -74,15 +74,21 @@ export async function recordPhoneCheck(o: PhoneCheckOutcome): Promise<void> {
  * Numbers can port, so verdicts expire after ~a quarter.
  */
 export async function latestPhoneVerdicts(phones: string[], days = 90): Promise<Map<string, boolean>> {
-  if (!phones.length) return new Map();
+  const map = new Map<string, boolean>();
+  if (!phones.length) return map;
   await ensurePhoneCheckLedger();
+  // Deliberately boring SQL: an explicit IN list of scalar params and a
+  // JS-computed cutoff. The first version used `= ANY(array)` + make_interval
+  // named-arg params, and the driver-side binding failed at runtime, which the
+  // callers' fail-open catch turned into a silent no-op cache.
+  const cutoff = new Date(Date.now() - days * 24 * 3600_000).toISOString();
+  const list = sql.join(phones.map((p) => sql`${p}`), sql`, `);
   const rows = await db.execute<{ phone: string; kept: boolean }>(
     sql`SELECT DISTINCT ON (phone) phone, kept
         FROM phone_check_outcomes
-        WHERE phone = ANY(${phones}) AND created_at > now() - make_interval(days => ${days})
+        WHERE phone IN (${list}) AND created_at > ${cutoff}
         ORDER BY phone, created_at DESC`,
   );
-  const map = new Map<string, boolean>();
   for (const r of rows.rows) map.set(r.phone, r.kept);
   return map;
 }
