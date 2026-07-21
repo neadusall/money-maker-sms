@@ -115,11 +115,13 @@ export default async function CampaignDetail({
   const scheduledFuture =
     campaign.scheduledAt && campaign.scheduledAt.getTime() > Date.now() ? campaign.scheduledAt : null;
 
-  // Fail-safe visibility: without a human-set send date & time nothing sends,
-  // and contacts added AFTER the last set time are held until a new one is set.
+  // Fail-safe visibility: without a human-set send date & time nothing sends.
+  // On an ACTIVE campaign the fired schedule is standing approval, so late
+  // arrivals (enrichment top-ups, Boost phones) flow through automatically and
+  // are just normal pending sends; only a paused/draft campaign holds them.
   const unscheduled = !campaign.scheduledAt;
   let heldNew = 0;
-  if (campaign.scheduledAt && !scheduledFuture) {
+  if (campaign.scheduledAt && !scheduledFuture && campaign.status !== "active") {
     const [row] = await db
       .select({ n: sql<number>`count(*)::int` })
       .from(contacts)
@@ -278,9 +280,11 @@ export default async function CampaignDetail({
           </svg>
           <span>
             <strong>
-              {heldNew} contact{heldNew === 1 ? " was" : "s were"} added after the last scheduled send and {heldNew === 1 ? "is" : "are"} held.
+              {heldNew} contact{heldNew === 1 ? " was" : "s were"} added after the last scheduled send and {heldNew === 1 ? "is" : "are"} waiting.
             </strong>{" "}
-            New arrivals never text automatically. Set a new send date &amp; time below (or click Send) to release them.
+            This campaign is not active, so nothing is texting. Press{" "}
+            {campaign.status === "draft" ? "Activate" : "Resume"}{" "}
+            and they send automatically with this campaign&apos;s current template and settings.
           </span>
         </div>
       ) : null}
