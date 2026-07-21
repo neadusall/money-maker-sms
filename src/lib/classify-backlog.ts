@@ -17,7 +17,7 @@ import { recordOptOut } from "./opt-out-record";
  * those side effects belong to the live inbound path where the reply is fresh.
  */
 
-const BACKLOG_WINDOW_MS = 90 * 24 * 3600_000;
+export const BACKLOG_WINDOW_MS = 90 * 24 * 3600_000;
 // When the key is set but the API rejects it (or is down), do not burn a call
 // every sweep forever: after a fully-failed batch, sleep the backlog.
 const FAILURE_PAUSE_MS = 10 * 60_000;

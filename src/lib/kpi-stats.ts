@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { ensurePhoneCheckLedger } from "@/lib/phone-accuracy";
+import { BACKLOG_WINDOW_MS } from "@/lib/classify-backlog";
 
 /**
  * Engine-side rollup behind GET /api/kpi-stats: everything the portal's
@@ -92,6 +93,11 @@ export interface KpiStats {
     lastOutboundAt: string | null;
     lastInboundAt: string | null;
     lastCheckAt: string | null;
+    /** False = no LLM key: replies are NOT being triaged, positive/reply-mix
+     *  stats undercount until the key is set and the backlog drain catches up. */
+    triageReady: boolean;
+    /** Inbound replies (backlog window) still awaiting classification. */
+    unclassifiedReplies: number;
   };
 }
 
@@ -109,7 +115,7 @@ export async function kpiStats(days = 30): Promise<KpiStats> {
   const cutoff = new Date(String(cutRow.cutoff)).toISOString();
   const positiveList = sql.join(POSITIVE_LABELS.map((l) => sql`${l}`), sql`, `);
 
-  const [checks, added, funnel, optOutRow, msg, failures, classes, msgDays, checkDays, optDays, llm, enrich, camp, statuses, fresh] = await Promise.all([
+  const [checks, added, funnel, optOutRow, msg, failures, classes, msgDays, checkDays, optDays, llm, enrich, camp, statuses, fresh, unclassified] = await Promise.all([
     one(sql`SELECT count(*)::int AS checked, count(*) FILTER (WHERE kept)::int AS cell
             FROM phone_check_outcomes WHERE created_at > ${cutoff}`),
     one(sql`SELECT count(*)::int AS added FROM contacts WHERE created_at > ${cutoff}`),
@@ -166,6 +172,9 @@ export async function kpiStats(days = 30): Promise<KpiStats> {
     one(sql`SELECT (SELECT max(created_at) FROM messages WHERE direction = 'outbound') AS last_out,
                    (SELECT max(created_at) FROM messages WHERE direction = 'inbound') AS last_in,
                    (SELECT max(created_at) FROM phone_check_outcomes) AS last_check`),
+    one(sql`SELECT count(*)::int AS n FROM messages
+            WHERE direction = 'inbound' AND classification IS NULL
+              AND created_at > ${new Date(Date.now() - BACKLOG_WINDOW_MS).toISOString()}`),
   ]);
 
   // Stitch the three daily series into one array keyed by day.
@@ -243,6 +252,8 @@ export async function kpiStats(days = 30): Promise<KpiStats> {
       lastOutboundAt: fresh.last_out ? new Date(String(fresh.last_out)).toISOString() : null,
       lastInboundAt: fresh.last_in ? new Date(String(fresh.last_in)).toISOString() : null,
       lastCheckAt: fresh.last_check ? new Date(String(fresh.last_check)).toISOString() : null,
+      triageReady: (process.env.ANTHROPIC_API_KEY || "").trim().length > 0,
+      unclassifiedReplies: n(unclassified.n),
     },
   };
 }
