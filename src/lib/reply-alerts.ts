@@ -16,10 +16,11 @@ import { normalizePhone } from "./phone";
  * Recruiter cell-phone alerts for candidate replies.
  *
  * The moment a candidate texts back, the campaign's recruiter gets an SMS on
- * their personal cell ("get in the tool and respond"), and then a reminder
- * every OSTEXT_ALERT_NAG_MINUTES (default 30) until they actually reply to
- * that candidate from the inbox. Closing the conversation or a candidate
- * opt-out also stops the reminders.
+ * their personal cell ("get in the tool and respond"), and then ONE reminder
+ * OSTEXT_ALERT_NAG_MINUTES later (default 30) if they still haven't replied
+ * from the inbox. After that single reminder the alert goes quiet; a new
+ * message from the candidate starts a fresh cycle. A human reply, closing the
+ * conversation, or a candidate opt-out also retires the alert.
  *
  * Recipients per alert:
  *   - OSTEXT_ALERT_ALWAYS_CELL: one cell that gets EVERY alert regardless of
@@ -137,10 +138,17 @@ export async function recordReplyAlert(args: {
     .where(eq(replyAlerts.conversationId, conversationId))
     .limit(1);
 
+  // A previously-resolved alert re-opening for a new candidate message starts
+  // a fresh cycle: the send cap (instant + one reminder) counts from zero.
+  const freshCycle = Boolean(existing?.resolvedAt);
   if (existing) {
     await db
       .update(replyAlerts)
-      .set({ lastInboundAt: inboundAt, resolvedAt: null })
+      .set({
+        lastInboundAt: inboundAt,
+        resolvedAt: null,
+        ...(freshCycle ? { alertCount: 0 } : {}),
+      })
       .where(eq(replyAlerts.id, existing.id));
   } else {
     await db
@@ -153,7 +161,7 @@ export async function recordReplyAlert(args: {
   }
 
   // Debounce: an open alert texted minutes ago doesn't need a second instant
-  // ping for a double-text. The clock's nag loop keeps the pressure on.
+  // ping for a double-text. The clock's reminder covers the follow-up.
   const recentlyAlerted =
     existing &&
     !existing.resolvedAt &&
@@ -169,20 +177,24 @@ export async function recordReplyAlert(args: {
 
   const sent = await deliver({ recipients, body, fromNumber: campaign.fromNumber });
   if (sent) {
+    const priorCount = freshCycle ? 0 : (existing?.alertCount ?? 0);
     await db
       .update(replyAlerts)
-      .set({ lastAlertAt: new Date(), alertCount: (existing?.alertCount ?? 0) + 1 })
+      .set({ lastAlertAt: new Date(), alertCount: priorCount + 1 })
       .where(eq(replyAlerts.conversationId, conversationId));
     console.log(`[reply-alerts] alerted ${recipients.join(", ")} for conversation ${conversationId}`);
   }
 }
 
 /**
- * Clock sweep: re-text the recruiter for every alert still unanswered after
- * the nag interval, and retire alerts that got a human reply (or whose
+ * Clock sweep: send the single follow-up reminder for alerts still unanswered
+ * after the nag interval, and retire alerts that got a human reply (or whose
  * conversation was closed / opted out). Also catches alerts whose instant
- * text failed to send (lastAlertAt null).
+ * text failed to send (lastAlertAt null). Each cycle sends at most
+ * MAX_SENDS_PER_CYCLE texts total (instant alert + one reminder); once the
+ * cap is hit the alert is retired quietly.
  */
+const MAX_SENDS_PER_CYCLE = 2;
 export async function sweepReplyAlerts(): Promise<{ nagged: number; resolved: number }> {
   const cutoff = new Date(Date.now() - nagMinutes() * 60_000);
   const due = await db
@@ -236,9 +248,16 @@ export async function sweepReplyAlerts(): Promise<{ nagged: number; resolved: nu
       }
     }
 
+    // Reminder already sent (instant + one follow-up): go quiet. A new
+    // candidate message re-opens the alert with a fresh cycle.
+    if (alert.alertCount >= MAX_SENDS_PER_CYCLE) {
+      await retire();
+      continue;
+    }
+
     const recipients = alertRecipients(campaign.recruiterEmail);
     if (recipients.length === 0) {
-      // Nobody configured to nag: park the alert instead of looping forever.
+      // Nobody configured to remind: park the alert instead of looping forever.
       await retire();
       continue;
     }
