@@ -3,7 +3,7 @@ import { db } from "@/db/client";
 import { campaigns, contacts, conversations, messages, scheduledMessages } from "@/db/schema";
 import { lookupLineType, sendSms } from "./telnyx";
 import { isAlwaysAllowed } from "./always-allow";
-import { recordPhoneCheck } from "./phone-accuracy";
+import { recordPhoneCheck, latestPhoneVerdicts } from "./phone-accuracy";
 import { processContactSend } from "./send";
 import { isWithinSendWindow } from "./send-window";
 import { scoreCandidatesBatch } from "./qualify";
@@ -35,6 +35,10 @@ export interface ValidateBatchResult {
   kept: number;
   removed: number;
   remaining: number;
+  /** Contacts left as "validating" because Telnyx could not be reached (outage,
+   *  rate limit, auth). The next clock tick retries them; they are never
+   *  deleted on an outage and never textable while held. */
+  heldError?: number;
 }
 
 /** One Telnyx line-type validation batch: promote confirmed mobiles
@@ -57,8 +61,16 @@ export async function runValidateBatch(campaignId: string): Promise<ValidateBatc
     .where(and(eq(contacts.campaignId, campaignId), eq(contacts.status, "validating")))
     .limit(VALIDATE_BATCH);
 
+  // A line-type verdict is a fact about the NUMBER, not the campaign: when the
+  // same number was already checked (another campaign, an earlier push), reuse
+  // that verdict instead of buying a second Telnyx lookup.
+  const cachedVerdicts = await latestPhoneVerdicts(batch.map((c) => c.phone)).catch(
+    () => new Map<string, boolean>(),
+  );
+
   let kept = 0;
   let removed = 0;
+  let heldError = 0;
   for (const contact of batch) {
     // Never validate-away an always-allow number (e.g. your own).
     if (isAlwaysAllowed(contact.phone)) {
@@ -66,11 +78,30 @@ export async function runValidateBatch(campaignId: string): Promise<ValidateBatc
       kept++;
       continue;
     }
+    const cached = cachedVerdicts.get(contact.phone);
+    if (cached !== undefined) {
+      // Apply the prior verdict without re-recording it: the accuracy ledger
+      // counts real Telnyx checks, not replays.
+      if (cached) {
+        await db.update(contacts).set({ status: "pending", lastError: null }).where(eq(contacts.id, contact.id));
+        kept++;
+      } else {
+        await db.delete(contacts).where(eq(contacts.id, contact.id));
+        removed++;
+      }
+      continue;
+    }
     let lineType: string;
     try {
       lineType = await lookupLineType(contact.phone);
     } catch {
-      lineType = "unknown";
+      // Telnyx could not be asked (outage, rate limit, auth): NOT a verdict.
+      // Leave the contact "validating" (never textable) for the next tick to
+      // retry; deleting here would drop real cells on a blip. After a few
+      // failures assume Telnyx-wide trouble and stop hammering this tick.
+      heldError++;
+      if (heldError >= 3) break;
+      continue;
     }
     // Phone-accuracy ledger: a failed number's contact row is deleted below, so
     // the verdict (and the source that supplied the number) is recorded FIRST.
@@ -98,7 +129,7 @@ export async function runValidateBatch(campaignId: string): Promise<ValidateBatc
     .from(contacts)
     .where(and(eq(contacts.campaignId, campaignId), eq(contacts.status, "validating")));
 
-  return { kept, removed, remaining };
+  return { kept, removed, remaining, ...(heldError ? { heldError } : {}) };
 }
 
 export interface ScoreBatchResult {

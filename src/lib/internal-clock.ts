@@ -88,7 +88,10 @@ async function sweep(): Promise<void> {
         if (r.held) {
           console.warn(`[clock validate ${id}] TELNYX_API_KEY missing: ${r.remaining} contacts held as validating`);
         } else {
-          console.log(`[clock validate ${id}] kept=${r.kept} removed=${r.removed} remaining=${r.remaining}`);
+          console.log(
+            `[clock validate ${id}] kept=${r.kept} removed=${r.removed} remaining=${r.remaining}` +
+              (r.heldError ? ` heldError=${r.heldError} (Telnyx unreachable, retrying next tick)` : ""),
+          );
         }
       } catch (err) {
         console.error(`[clock validate ${id}]`, err);

@@ -50,11 +50,18 @@ export type LineType = "mobile" | "landline" | "voip" | "toll_free" | "unknown";
 
 /**
  * Look up a number's line type via Telnyx Number Lookup (carrier data).
- * Returns "unknown" on any error so callers can decide how to treat it.
+ *
+ * Returns a VERDICT about the number — "unknown" means Telnyx answered but
+ * could not class the line (or rejected the number itself as unroutable), and
+ * the strict mobile-only rule may act on that. THROWS when Telnyx could not be
+ * asked at all (network failure, rate limit, auth, 5xx): that is an outage,
+ * not a fact about the number, so callers must hold the contact for a retry
+ * rather than treat it as "not a cell".
  */
 export async function lookupLineType(phone: string): Promise<LineType> {
   const key = process.env.TELNYX_API_KEY;
-  if (!key) return "unknown";
+  if (!key) throw new Error("TELNYX_API_KEY is not set");
+  let lastFailure = "";
   // One retry so a transient blip doesn't get a real mobile number dropped.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -62,24 +69,27 @@ export async function lookupLineType(phone: string): Promise<LineType> {
         `https://api.telnyx.com/v2/number_lookup/${encodeURIComponent(phone)}?type=carrier`,
         { headers: { Authorization: `Bearer ${key}` } },
       );
-      if (!res.ok) {
-        if (attempt === 0) continue;
+      if (res.ok) {
+        const json = (await res.json()) as { data?: { carrier?: { type?: string } } };
+        const raw = (json.data?.carrier?.type ?? "").toLowerCase();
+        if (raw.includes("mobile") || raw.includes("wireless")) return "mobile";
+        if (raw.includes("landline") || raw.includes("fixed")) return "landline";
+        if (raw.includes("voip")) return "voip";
+        if (raw.includes("toll")) return "toll_free";
         return "unknown";
       }
-      const json = (await res.json()) as { data?: { carrier?: { type?: string } } };
-      const raw = (json.data?.carrier?.type ?? "").toLowerCase();
-      if (raw.includes("mobile") || raw.includes("wireless")) return "mobile";
-      if (raw.includes("landline") || raw.includes("fixed")) return "landline";
-      if (raw.includes("voip")) return "voip";
-      if (raw.includes("toll")) return "toll_free";
-      return "unknown";
+      // A plain 4xx (not auth or rate limit) is Telnyx's real answer for THIS
+      // number (malformed, unroutable): a verdict, not an outage.
+      if (res.status >= 400 && res.status < 500 && ![401, 403, 429].includes(res.status)) {
+        return "unknown";
+      }
+      lastFailure = `HTTP ${res.status}`;
     } catch (err) {
-      if (attempt === 0) continue;
-      console.warn(`[number-lookup] failed for ${phone}:`, err);
-      return "unknown";
+      lastFailure = err instanceof Error ? err.message : String(err);
     }
   }
-  return "unknown";
+  console.warn(`[number-lookup] failed for ${phone}: ${lastFailure}`);
+  throw new Error(`number lookup unavailable: ${lastFailure}`);
 }
 
 export type WebhookVerifyResult =

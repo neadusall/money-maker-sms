@@ -3,6 +3,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db/client";
 import { campaigns, contacts, suppressedNumbers } from "@/db/schema";
 import { normalizePhone } from "@/lib/phone";
+import { latestPhoneVerdicts } from "@/lib/phone-accuracy";
 import { isQStashConfigured, enqueueValidationDrain, enqueueScoreDrain } from "@/lib/schedule";
 import { kickSoon } from "@/lib/internal-clock";
 
@@ -187,12 +188,29 @@ export async function POST(req: Request) {
     for (const r of optedContacts) optedOut.add(r.phone);
     for (const r of optedSupp) optedOut.add(r.phone);
   }
-  const toInsert = normalized.filter((r) => !optedOut.has(r.phone));
+  const afterOptOut = normalized.filter((r) => !optedOut.has(r.phone));
 
   // Default ON, and independent of QStash: an unvalidated contact must never
   // become textable just because the drain queue happens to be unconfigured.
   const validate = body.validate !== false;
+
+  // KNOWN-VERDICT REUSE: a Telnyx line-type verdict is a fact about the number,
+  // not the campaign. Validation DELETES failed contact rows, so every re-push
+  // (autoflow top-up, parity backfill, manual repeat) used to re-insert the
+  // same landlines and re-buy their lookups in an endless churn. A fresh prior
+  // verdict now short-circuits: confirmed non-cells never enter the campaign,
+  // confirmed cells land as "pending" without a second billed lookup.
+  let verdicts = new Map<string, boolean>();
+  if (validate && afterOptOut.length) {
+    verdicts = await latestPhoneVerdicts(afterOptOut.map((r) => r.phone)).catch(() => new Map());
+  }
+  const knownNonMobile = validate
+    ? afterOptOut.filter((r) => verdicts.get(r.phone) === false).length
+    : 0;
+  const toInsert = validate ? afterOptOut.filter((r) => verdicts.get(r.phone) !== false) : afterOptOut;
+
   let added = 0;
+  let confirmedCell = 0;
   for (let i = 0; i < toInsert.length; i += INSERT_CHUNK) {
     const chunk = toInsert.slice(i, i + INSERT_CHUNK);
     const inserted = await db
@@ -209,12 +227,15 @@ export async function POST(req: Request) {
           linkedinUrl: clean(r.linkedinUrl),
           location: clean(r.location),
           customFields: r.customFields && typeof r.customFields === "object" ? r.customFields : {},
-          status: (validate ? "validating" : "pending") as "validating" | "pending",
+          status: (!validate || verdicts.get(r.phone) === true ? "pending" : "validating") as
+            | "validating"
+            | "pending",
         })),
       )
       .onConflictDoNothing({ target: [contacts.campaignId, contacts.phone] })
-      .returning({ id: contacts.id });
+      .returning({ id: contacts.id, phone: contacts.phone });
     added += inserted.length;
+    for (const row of inserted) if (verdicts.get(row.phone) === true) confirmedCell++;
   }
 
   if (added > 0) {
@@ -239,6 +260,12 @@ export async function POST(req: Request) {
     optedOut: optedOut.size,
     // in-payload dupes + already-in-campaign rows the unique index absorbed
     deduped: dupInPayload + (toInsert.length - added),
+    // Numbers a fresh Telnyx check already judged not a cell (landline, VoIP,
+    // toll-free): left out rather than churned through validation again.
+    knownNonMobile,
+    // Inserted straight to textable because a fresh Telnyx check already
+    // confirmed the number is a cell (no second billed lookup).
+    confirmedCell,
     // "queued": the Telnyx validation drain is running (QStash or the internal
     // clock). Contacts stay held as "validating" (never textable) until it
     // confirms each number is a cell.
