@@ -334,9 +334,13 @@ export const suppressedNumbers = pgTable(
   "suppressed_numbers",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    // "Already contacted" is a fact about the NUMBER, not the campaign, so this
+    // ledger must outlive the campaign that wrote it: deleting a duplicate
+    // campaign used to cascade its suppression rows away and blind the
+    // cross-campaign guard for exactly the people that campaign had texted.
+    // SET NULL keeps the row (phone + reason) with the campaign reference gone.
     campaignId: uuid("campaign_id")
-      .references(() => campaigns.id, { onDelete: "cascade" })
-      .notNull(),
+      .references(() => campaigns.id, { onDelete: "set null" }),
     phone: text("phone").notNull(),
     reason: text("reason"),
     createdAt: timestamp("created_at", { withTimezone: true })

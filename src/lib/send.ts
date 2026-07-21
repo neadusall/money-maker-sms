@@ -1,4 +1,4 @@
-import { and, eq, ne, inArray, gte } from "drizzle-orm";
+import { and, eq, ne, or, isNull, inArray, gte } from "drizzle-orm";
 import { db } from "@/db/client";
 import { contacts, conversations, messages, suppressedNumbers, type Campaign, type Contact } from "@/db/schema";
 import { renderTemplate, findUnmergedTokens } from "./merge";
@@ -34,7 +34,9 @@ export async function alreadyContactedElsewhere(
   const cooldownDays = Number(process.env.OSTEXT_RECONTACT_COOLDOWN_DAYS) || 0;
   const conds = [
     eq(suppressedNumbers.phone, phone),
-    ne(suppressedNumbers.campaignId, campaignId),
+    // A NULL campaignId is a row whose writing campaign was deleted — that prior
+    // contact still counts (SQL `ne` alone silently drops NULL rows).
+    or(isNull(suppressedNumbers.campaignId), ne(suppressedNumbers.campaignId, campaignId))!,
     inArray(suppressedNumbers.reason, ["sent", "messaged", "opted_out"]),
   ];
   if (cooldownDays > 0) {
@@ -45,7 +47,7 @@ export async function alreadyContactedElsewhere(
     .from(suppressedNumbers)
     .where(and(...conds))
     .limit(1);
-  return prior ? { blocked: true, byCampaignId: prior.campaignId } : { blocked: false };
+  return prior ? { blocked: true, byCampaignId: prior.campaignId ?? undefined } : { blocked: false };
 }
 
 /** Archive a contact that the cross-campaign guard blocked: soft-delete (so it

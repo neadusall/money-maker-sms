@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { and, eq, isNull, ne, desc, sql, inArray } from "drizzle-orm";
+import { and, eq, isNull, ne, or, desc, sql, inArray } from "drizzle-orm";
 import { db } from "@/db/client";
 import {
   campaigns,
@@ -189,7 +189,12 @@ async function previouslyTextedPhones(phones: string[], excludeCampaignId: strin
   const fromSuppression = await db
     .select({ phone: suppressedNumbers.phone })
     .from(suppressedNumbers)
-    .where(and(inArray(suppressedNumbers.phone, uniq), ne(suppressedNumbers.campaignId, excludeCampaignId)));
+    // NULL campaignId = the writing campaign was deleted; the prior contact still
+    // counts (SQL `ne` alone silently drops NULL rows).
+    .where(and(
+      inArray(suppressedNumbers.phone, uniq),
+      or(isNull(suppressedNumbers.campaignId), ne(suppressedNumbers.campaignId, excludeCampaignId)),
+    ));
   const fromContacts = await db
     .select({ phone: contacts.phone })
     .from(contacts)
