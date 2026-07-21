@@ -4,6 +4,7 @@ import { campaigns, contacts, scheduledMessages } from "@/db/schema";
 import { isQStashConfigured } from "./schedule";
 import { runValidateBatch, runScoreBatch, runSendBatch, dispatchScheduledMessage } from "./drains";
 import { sweepReplyAlerts } from "./reply-alerts";
+import { runClassifyBacklog } from "./classify-backlog";
 
 /**
  * The in-process clock: the self-hosted replacement for QStash.
@@ -180,6 +181,18 @@ async function sweep(): Promise<void> {
       }
     } catch (err) {
       console.error("[clock reply-alerts]", err);
+    }
+    // 6. Classification backlog: replies that arrived while the LLM key was
+    // missing/broken get triaged now, so the KPI reply mix and opt-out counts
+    // heal themselves instead of undercounting forever. No-ops instantly when
+    // there is no key or no backlog.
+    try {
+      const r = await runClassifyBacklog();
+      if (r.classified || r.failed) {
+        console.log(`[clock classify-backlog] classified=${r.classified} failed=${r.failed} remaining=${r.remaining}`);
+      }
+    } catch (err) {
+      console.error("[clock classify-backlog]", err);
     }
   } catch (err) {
     // One bad sweep must never kill the clock.

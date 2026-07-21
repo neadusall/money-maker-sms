@@ -32,6 +32,7 @@ import { sendSms } from "./telnyx";
 import { processContactSend } from "./send";
 import { normalizePhone } from "./phone";
 import { isStopKeyword } from "./opt-out";
+import { recordOptOut } from "./opt-out-record";
 import { recordReplyAlert } from "./reply-alerts";
 import { classifyReply, isAutoSendCandidate, isAutoIgnoreNegative } from "./classify";
 import { draftReply } from "./draft-reply";
@@ -773,17 +774,11 @@ export async function recordInbound(args: {
         telnyxId: args.telnyxId ?? null,
         classification: "stop",
       });
-    // Permanent global do-not-text: opt out EVERY contact row with this number
-    // (across all campaigns), so no current or future campaign can message it.
-    await db
-      .update(contacts)
-      .set({ optedOut: true, status: "opted_out" })
-      .where(eq(contacts.phone, e164));
-    // Record on the suppression list too, so future CSV uploads skip it on sight.
-    await db
-      .insert(suppressedNumbers)
-      .values({ campaignId: campaign.id, phone: e164, reason: "opted_out" })
-      .onConflictDoNothing({ target: [suppressedNumbers.campaignId, suppressedNumbers.phone] });
+    // Permanent global do-not-text: opts out every contact row with this
+    // number and upserts the suppression ledger to reason 'opted_out' (the
+    // sender's earlier 'sent' row would otherwise swallow the insert and the
+    // opt-out would never be recorded).
+    await recordOptOut({ campaignId: campaign.id, phone: e164 });
     await db
       .update(conversations)
       .set({
@@ -1017,8 +1012,10 @@ async function classifyInboundSilent(args: {
   // "needs attention" (set on inbound) until Ryan opens it.
   const bucket = sentimentOf(classification.label);
   if (classification.label === "stop") {
-    await db.update(contacts).set({ optedOut: true, status: "opted_out" }).where(eq(contacts.id, args.contact.id));
-    await db.update(conversations).set({ status: "opted_out" }).where(eq(conversations.id, args.conversationId));
+    // Same permanent opt-out as the STOP keyword path: all contact rows for
+    // the number, plus the suppression-ledger upsert (this path used to skip
+    // the ledger entirely, so AI-detected stops never counted as opt-outs).
+    await recordOptOut({ campaignId: args.campaign.id, phone: args.contact.phone, conversationId: args.conversationId });
   } else if (bucket === "negative") {
     await db.update(conversations).set({ status: "closed" }).where(eq(conversations.id, args.conversationId));
   } else if (!args.contact.optedOut) {

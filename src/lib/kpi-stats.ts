@@ -97,7 +97,16 @@ export interface KpiStats {
 
 export async function kpiStats(days = 30): Promise<KpiStats> {
   await ensurePhoneCheckLedger();
-  const cutoff = new Date(Date.now() - days * 24 * 3600_000).toISOString();
+  // The window is the last `days` CALENDAR days in APP_TIMEZONE, today
+  // included (days=30 means today plus the 29 days before it). A rolling
+  // now()-N*24h cutoff made the headline counts disagree with the daily[]
+  // series: daily buckets by local calendar day, and the rolling cutoff kept
+  // a partial extra day on the far end that the portal's day axis (last N
+  // calendar days) never renders, so tiles and trend totals drifted apart.
+  // `back` is clamped locally so the raw interval below is always a safe int.
+  const back = Math.max(0, Math.min(89, Math.floor(days) - 1));
+  const cutRow = await one(sql`SELECT ((date_trunc('day', now() AT TIME ZONE ${TZ}) - ${sql.raw(`interval '${back} days'`)}) AT TIME ZONE ${TZ}) AS cutoff`);
+  const cutoff = new Date(String(cutRow.cutoff)).toISOString();
   const positiveList = sql.join(POSITIVE_LABELS.map((l) => sql`${l}`), sql`, `);
 
   const [checks, added, funnel, optOutRow, msg, failures, classes, msgDays, checkDays, optDays, llm, enrich, camp, statuses, fresh] = await Promise.all([

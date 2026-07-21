@@ -40,7 +40,15 @@ export async function alreadyContactedElsewhere(
     inArray(suppressedNumbers.reason, ["sent", "messaged", "opted_out"]),
   ];
   if (cooldownDays > 0) {
-    conds.push(gte(suppressedNumbers.createdAt, new Date(Date.now() - cooldownDays * 86_400_000)));
+    // The cooldown only ever re-opens "sent"/"messaged" numbers. An opt-out is
+    // a legal instruction, not a pacing rule: reason 'opted_out' blocks forever
+    // no matter how old the row is.
+    conds.push(
+      or(
+        eq(suppressedNumbers.reason, "opted_out"),
+        gte(suppressedNumbers.createdAt, new Date(Date.now() - cooldownDays * 86_400_000)),
+      )!,
+    );
   }
   const [prior] = await db
     .select({ campaignId: suppressedNumbers.campaignId })
