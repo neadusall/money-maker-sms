@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { and, eq, isNull, lte, ne, desc, sql, inArray } from "drizzle-orm";
+import { and, eq, isNull, ne, desc, sql, inArray } from "drizzle-orm";
 import { db } from "@/db/client";
 import {
   campaigns,
@@ -622,8 +622,8 @@ export async function sendCampaignBatch(campaignId: string): Promise<void> {
         eq(contacts.status, "pending"),
         eq(contacts.optedOut, false),
         isNull(contacts.deletedAt),
-        // Approval cutoff: only contacts present when the send time was set.
-        lte(contacts.createdAt, campaign.scheduledAt),
+        // No created-at cutoff (matches runSendBatch): a human-set schedule on
+        // this campaign is standing approval, late-pushed contacts included.
         minScore ? sql`${contacts.qualificationScore} >= ${minScore}` : undefined,
       ),
     )
