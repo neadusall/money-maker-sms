@@ -753,14 +753,42 @@ export async function recordInbound(args: {
     .innerJoin(campaigns, eq(campaigns.id, contacts.campaignId))
     .where(eq(contacts.phone, e164))
     .orderBy(desc(contacts.createdAt))
-    .limit(1);
+    .limit(25);
 
   if (matches.length === 0) {
     console.warn(`[recordInbound] No contact found for ${e164}`);
     return { matched: false };
   }
 
-  const { contact, campaign } = matches[0];
+  // Attribute the inbound to the campaign that actually texted this number
+  // (most recent outbound wins), not blindly to the newest contact row. The
+  // same phone often exists in several campaigns (combined lists), and the
+  // newest upload frequently is NOT the sender: the reply then landed in a
+  // campaign with zero outbounds, inflating its reply stats while the real
+  // thread never saw the answer. Fallback: newest contact row (cold inbound).
+  let picked = matches[0];
+  if (matches.length > 1) {
+    const outRows = await db
+      .select({
+        contactId: conversations.contactId,
+        lastOut: sql<string>`max(${messages.createdAt})`,
+      })
+      .from(conversations)
+      .innerJoin(messages, and(eq(messages.conversationId, conversations.id), eq(messages.direction, "outbound")))
+      .where(inArray(conversations.contactId, matches.map((m) => m.contact.id)))
+      .groupBy(conversations.contactId);
+    const lastOutByContact = new Map(outRows.map((r) => [r.contactId, new Date(r.lastOut).getTime()]));
+    let bestOut = 0;
+    for (const m of matches) {
+      const t = lastOutByContact.get(m.contact.id) ?? 0;
+      if (t > bestOut) {
+        bestOut = t;
+        picked = m;
+      }
+    }
+  }
+
+  const { contact, campaign } = picked;
   const convo = await getOrCreateConversation(campaign.id, contact.id);
 
   if (isStopKeyword(args.body)) {

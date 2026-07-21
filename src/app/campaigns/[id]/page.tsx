@@ -19,6 +19,7 @@ import { AutoRefresh } from "@/components/AutoRefresh";
 import { LiveBadge } from "@/components/LiveBadge";
 import { KpiCard, Funnel, SentimentMeter, MiniStat, pct } from "@/components/Stats";
 import { sentimentOf } from "@/lib/sentiment";
+import { campaignFunnels, EMPTY_FUNNEL } from "@/lib/campaign-stats";
 
 export const dynamic = "force-dynamic";
 
@@ -40,9 +41,6 @@ export default async function CampaignDetail({
       // Pending contacts that actually meet the fit bar — i.e. who "Send" will text.
       qualifying: sql<number>`count(*) filter (where ${contacts.status} = 'pending' and ${contacts.optedOut} = false and (${bar} = 0 or ${contacts.qualificationScore} >= ${bar}))::int`,
       validating: sql<number>`count(*) filter (where ${contacts.status} = 'validating')::int`,
-      sent: sql<number>`count(*) filter (where ${contacts.status} in ('sent','delivered','replied'))::int`,
-      delivered: sql<number>`count(*) filter (where ${contacts.status} in ('delivered','replied'))::int`,
-      replied: sql<number>`count(*) filter (where ${contacts.status} = 'replied')::int`,
       optedOut: sql<number>`count(*) filter (where ${contacts.status} = 'opted_out')::int`,
       failed: sql<number>`count(*) filter (where ${contacts.status} = 'failed')::int`,
       emailsSent: sql<number>`count(*) filter (where ${contacts.positionEmailSentAt} is not null)::int`,
@@ -51,15 +49,11 @@ export default async function CampaignDetail({
     .from(contacts)
     .where(eq(contacts.campaignId, id));
 
-  // Raw SQL with a table alias — Drizzle won't correlate ${conversations.id}
-  // inside a filtered EXISTS subquery (it silently returns 0).
-  const convoRows = await db.execute(sql`
-    SELECT
-      count(*) filter (where cv.status = 'needs_attention')::int needs_attention,
-      count(*) filter (where exists (select 1 from messages m where m.conversation_id = cv.id and m.direction = 'inbound'))::int replied
-    FROM conversations cv WHERE cv.campaign_id = ${id}`);
-  const convoRow = (convoRows.rows[0] ?? {}) as { needs_attention?: number; replied?: number };
-  const convoStats = { needsAttention: Number(convoRow.needs_attention ?? 0), replied: Number(convoRow.replied ?? 0) };
+  // Sent/delivered/replied come from the messages table (see campaign-stats):
+  // contact.status churn and unearned inbounds made the contact-status
+  // versions of these numbers lie.
+  const funnel = (await campaignFunnels(id)).get(id) ?? EMPTY_FUNNEL;
+  const convoStats = { needsAttention: funnel.needsAttention, replied: funnel.replied };
 
   // Reply-sentiment breakdown from the AI classifications on replied threads.
   const classRows = await db
@@ -103,9 +97,9 @@ export default async function CampaignDetail({
   const qualifying = stats?.qualifying ?? 0;
   const unscored = stats?.unscored ?? 0;
   const total = stats?.total ?? 0;
-  const sent = stats?.sent ?? 0;
-  const delivered = stats?.delivered ?? 0;
-  const replied = convoStats?.replied ?? 0;
+  const sent = funnel.messaged;
+  const delivered = funnel.delivered;
+  const replied = funnel.replied;
   const classified = positive + neutral + negative;
   const deliveryRate = pct(delivered, sent);
   const replyRate = pct(replied, delivered);
@@ -313,7 +307,19 @@ export default async function CampaignDetail({
         </div>
       ) : null}
 
-      {unscored > 0 && campaign.scoringError === "credit" ? (
+      {unscored > 0 && campaign.scoringError === "no_key" ? (
+        <div className="flex items-start gap-2 rounded-xl border border-rose-300 bg-rose-50 p-4 text-sm text-rose-900">
+          <svg className="mt-0.5 h-4 w-4 shrink-0 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+          </svg>
+          <span>
+            <strong>Scoring paused: the AI key is not set up on this OS Text engine.</strong> {unscored} candidate
+            {unscored === 1 ? "" : "s"} can&apos;t be fit-scored, and reply sorting (positive / negative) is off too.
+            Ask your administrator to add the Anthropic API key to the engine; scoring resumes automatically once it&apos;s
+            in place.
+          </span>
+        </div>
+      ) : unscored > 0 && campaign.scoringError === "credit" ? (
         <div className="flex items-start gap-2 rounded-xl border border-rose-300 bg-rose-50 p-4 text-sm text-rose-900">
           <svg className="mt-0.5 h-4 w-4 shrink-0 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
@@ -341,11 +347,11 @@ export default async function CampaignDetail({
         </div>
       ) : null}
 
-      {qualifying > 0 && unscored === 0 && (stats?.sent ?? 0) > 0 ? (
+      {qualifying > 0 && unscored === 0 && sent > 0 ? (
         <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
           <strong>You&apos;re adding to a campaign that already ran.</strong> Send texts only the {qualifying} unsent
           contact{qualifying === 1 ? "" : "s"}
-          {bar > 0 ? ` scoring ≥ ${bar}` : ""}: the {stats?.sent}{" "}you&apos;ve already messaged are skipped, so nobody
+          {bar > 0 ? ` scoring ≥ ${bar}` : ""}: the {sent}{" "}you&apos;ve already messaged are skipped, so nobody
           is texted twice.
         </div>
       ) : null}

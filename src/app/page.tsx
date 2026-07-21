@@ -9,6 +9,7 @@ import { LiveBadge } from "@/components/LiveBadge";
 import { KpiCard, MiniStat, pct } from "@/components/Stats";
 import { OwnerChip, type KnownOwner } from "@/components/OwnerChip";
 import { sentimentOf } from "@/lib/sentiment";
+import { campaignFunnels } from "@/lib/campaign-stats";
 
 export const dynamic = "force-dynamic";
 
@@ -29,32 +30,21 @@ export default async function Dashboard() {
     .orderBy(desc(campaigns.createdAt));
 
   // Grouped aggregations (reliable; correlated subqueries were returning 0).
+  // Contact rows carry only pipeline state here (totals, opt-outs, emails):
+  // sent/delivered/replied come from campaignFunnels, i.e. from the messages
+  // table, because contact.status churn (opt-out overwrites 'delivered') and
+  // unearned inbounds (STOP, inbound-only threads) skewed the card numbers.
   const contactAgg = await db
     .select({
       campaignId: contacts.campaignId,
       total: sql<number>`count(*)::int`,
-      sent: sql<number>`count(*) filter (where ${contacts.status} in ('sent','delivered','replied'))::int`,
-      delivered: sql<number>`count(*) filter (where ${contacts.status} in ('delivered','replied'))::int`,
-      replied: sql<number>`count(*) filter (where ${contacts.status} = 'replied')::int`,
       optedOut: sql<number>`count(*) filter (where ${contacts.status} = 'opted_out')::int`,
       emailsSent: sql<number>`count(*) filter (where ${contacts.positionEmailSentAt} is not null)::int`,
     })
     .from(contacts)
     .groupBy(contacts.campaignId);
 
-  // Raw SQL with an alias — Drizzle won't correlate ${conversations.id} inside a
-  // filtered EXISTS subquery (silently returns 0). Reply = conversations that
-  // actually received an inbound (robust vs. contacts.status churn).
-  const convoAggRows = await db.execute(sql`
-    SELECT cv.campaign_id cid,
-      count(*) filter (where cv.status = 'needs_attention')::int needs_attention,
-      count(*) filter (where exists (select 1 from messages m where m.conversation_id = cv.id and m.direction = 'inbound'))::int replied
-    FROM conversations cv GROUP BY cv.campaign_id`);
-  const convoAgg = (convoAggRows.rows as { cid: string; needs_attention: number; replied: number }[]).map((r) => ({
-    campaignId: r.cid,
-    needsAttention: Number(r.needs_attention),
-    replied: Number(r.replied),
-  }));
+  const funnelMap = await campaignFunnels();
 
   const classAgg = await db
     .select({
@@ -67,7 +57,6 @@ export default async function Dashboard() {
     .groupBy(conversations.campaignId, conversations.classification);
 
   const contactMap = new Map(contactAgg.map((r) => [r.campaignId, r]));
-  const convoMap = new Map(convoAgg.map((r) => [r.campaignId, r]));
 
   const sentimentMap = new Map<string, Sentiment>();
   for (const r of classAgg) {
@@ -79,16 +68,16 @@ export default async function Dashboard() {
 
   const rows = camps.map((c) => {
     const ca = contactMap.get(c.id);
-    const va = convoMap.get(c.id);
+    const f = funnelMap.get(c.id);
     const senti = sentimentMap.get(c.id) ?? { positive: 0, neutral: 0, negative: 0 };
     return {
       ...c,
       contactCount: ca?.total ?? 0,
-      sentCount: ca?.sent ?? 0,
-      delivered: ca?.delivered ?? 0,
-      replied: va?.replied ?? 0,
+      sentCount: f?.messaged ?? 0,
+      delivered: f?.delivered ?? 0,
+      replied: f?.replied ?? 0,
       emailsSent: ca?.emailsSent ?? 0,
-      needsAttention: va?.needsAttention ?? 0,
+      needsAttention: f?.needsAttention ?? 0,
       senti,
     };
   });

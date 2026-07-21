@@ -167,6 +167,20 @@ export async function runScoreBatch(campaignId: string): Promise<ScoreBatchResul
     isNull(contacts.qualificationScore),
   );
 
+  // Without an AI key every scoring call is doomed: don't burn an attempt per
+  // clock tick forever, and stamp WHY scoring is stalled so the campaign page
+  // stops showing an eternal "scoring..." spinner.
+  if (!(process.env.ANTHROPIC_API_KEY || "").trim()) {
+    const [{ remaining: rem }] = await db
+      .select({ remaining: sql<number>`count(*)::int` })
+      .from(contacts)
+      .where(selector);
+    if (rem > 0 && campaign.scoringError !== "no_key") {
+      await db.update(campaigns).set({ scoringError: "no_key" }).where(eq(campaigns.id, campaignId));
+    }
+    return { scored: 0, failed: 0, remaining: rem, creditBlocked: false };
+  }
+
   const batch = await db.select().from(contacts).where(selector).limit(SCORE_BATCH);
 
   // Compact rubric (generated once per campaign) keeps each scoring prompt small.

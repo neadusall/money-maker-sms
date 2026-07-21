@@ -121,7 +121,15 @@ export async function kpiStats(days = 30): Promise<KpiStats> {
     one(sql`SELECT count(*)::int AS added FROM contacts WHERE created_at > ${cutoff}`),
     one(sql`SELECT count(DISTINCT ct.id) FILTER (WHERE m.direction = 'outbound')::int AS texted,
                    count(DISTINCT ct.id) FILTER (WHERE m.direction = 'outbound' AND m.status = 'delivered')::int AS delivered,
-                   count(DISTINCT ct.id) FILTER (WHERE m.direction = 'inbound')::int AS replied,
+                   -- A "reply" is an inbound that is not a STOP and that follows an
+                   -- outbound in the same conversation. A bare inbound (STOP keyword,
+                   -- or a phone-matched text this campaign never sent to) is not
+                   -- engagement and used to inflate the reply rate.
+                   count(DISTINCT ct.id) FILTER (WHERE m.direction = 'inbound'
+                     AND m.classification IS DISTINCT FROM 'stop'
+                     AND EXISTS (SELECT 1 FROM messages mo
+                                 WHERE mo.conversation_id = cv.id AND mo.direction = 'outbound'
+                                   AND mo.created_at < m.created_at))::int AS replied,
                    count(DISTINCT ct.id) FILTER (WHERE cv.classification IN (${positiveList}))::int AS positive,
                    count(DISTINCT ct.id) FILTER (WHERE cv.classification = 'wrong_person' OR m.classification = 'wrong_person')::int AS wrong_number
             FROM contacts ct
