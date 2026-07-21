@@ -13,6 +13,7 @@ import { AutoRefresh } from "@/components/AutoRefresh";
 import { LiveBadge } from "@/components/LiveBadge";
 import { formatPhone } from "@/lib/phone";
 import { linkedinLink } from "@/lib/linkedin";
+import { campaignTenantIs, sessionTenant } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,8 @@ export default async function TodosPage({
 }) {
   const sp = await searchParams;
   const channel = sp.channel && sp.channel !== "all" ? sp.channel : null;
+  // Tenant wall: the board only shows to-dos from this tenant's campaigns.
+  const tenant = await sessionTenant();
 
   // Show ALL to-dos (open AND done) — marking one done just checks it off in
   // place; it stays on the board until explicitly deleted with the trash icon.
@@ -64,7 +67,7 @@ export default async function TodosPage({
     .from(todos)
     .innerJoin(contacts, eq(contacts.id, todos.contactId))
     .innerJoin(campaigns, eq(campaigns.id, todos.campaignId))
-    .where(and(isNull(contacts.deletedAt), channel ? eq(todos.channel, channel as TodoChannel) : undefined))
+    .where(and(isNull(contacts.deletedAt), campaignTenantIs(tenant), channel ? eq(todos.channel, channel as TodoChannel) : undefined))
     .orderBy(desc(todos.createdAt))
     .limit(1000);
 

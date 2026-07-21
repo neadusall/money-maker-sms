@@ -1,7 +1,8 @@
 import { notFound } from "next/navigation";
 import { asc, eq } from "drizzle-orm";
 import { db } from "@/db/client";
-import { campaigns, contacts, conversations, messages } from "@/db/schema";
+import { contacts, conversations, messages } from "@/db/schema";
+import { tenantCampaign } from "@/lib/tenant";
 import {
   closeConversation,
   generateDraftForMessage,
@@ -28,7 +29,7 @@ export default async function ThreadPage({
 
   const [convo] = await db.select().from(conversations).where(eq(conversations.id, conversationId));
   if (!convo || convo.campaignId !== id) notFound();
-  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, id));
+  const campaign = await tenantCampaign(id);
   const [contact] = await db.select().from(contacts).where(eq(contacts.id, convo.contactId));
   if (!campaign || !contact) notFound();
 

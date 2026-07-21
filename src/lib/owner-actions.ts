@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { campaigns } from "@/db/schema";
 import { auth } from "./auth";
+import { assertTenantCampaign } from "./tenant";
 
 /**
  * Reassign which recruiter owns a campaign, straight from the dashboard chip.
@@ -18,6 +19,7 @@ export async function updateCampaignOwner(
 ): Promise<void> {
   const session = await auth();
   if (!session?.user?.id) throw new Error("Not signed in");
+  await assertTenantCampaign(campaignId); // reassignment stays inside the tenant
 
   const cleanName = name.trim().slice(0, 80);
   const cleanEmail = email.trim().toLowerCase().slice(0, 120);

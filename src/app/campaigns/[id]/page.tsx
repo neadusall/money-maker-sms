@@ -2,7 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
-import { campaigns, campaignTemplates, contacts, conversations, type CampaignTemplate } from "@/db/schema";
+import { campaignTemplates, contacts, conversations, type CampaignTemplate } from "@/db/schema";
+import { sessionTenant, tenantCampaign } from "@/lib/tenant";
 import {
   applyCampaignTemplate,
   deleteCampaign,
@@ -30,7 +31,8 @@ export default async function CampaignDetail({
 }) {
   const { id } = await params;
 
-  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, id));
+  // Tenant-checked load: a campaign outside the signed-in user's tenant 404s.
+  const campaign = await tenantCampaign(id);
   if (!campaign) notFound();
 
   const bar = campaign.minScoreToSend ?? 0;
@@ -88,7 +90,14 @@ export default async function CampaignDetail({
   // table (mid-rollout): the page must never 500 over an optional convenience.
   let templates: CampaignTemplate[] = [];
   try {
-    templates = await db.select().from(campaignTemplates).orderBy(asc(campaignTemplates.name));
+    // Only this tenant's saved templates: template names/contents are tenant
+    // data too (legacy NULL rows belong to house).
+    const tenant = await sessionTenant();
+    templates = await db
+      .select()
+      .from(campaignTemplates)
+      .where(sql`coalesce(nullif(trim(${campaignTemplates.tenant}), ''), 'house') = ${tenant}`)
+      .orderBy(asc(campaignTemplates.name));
   } catch {
     templates = [];
   }

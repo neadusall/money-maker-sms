@@ -2,7 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { and, desc, eq, isNull, ne, sql, inArray } from "drizzle-orm";
 import { db } from "@/db/client";
-import { campaigns, contacts, suppressedNumbers } from "@/db/schema";
+import { contacts, suppressedNumbers } from "@/db/schema";
+import { tenantCampaign } from "@/lib/tenant";
 import {
   uploadContactsCsv,
   deleteContact,
@@ -31,7 +32,7 @@ export default async function ContactsPage({
 }) {
   const { id } = await params;
   const sp = await searchParams;
-  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, id));
+  const campaign = await tenantCampaign(id);
   if (!campaign) notFound();
 
   const minScore = campaign.minScoreToSend ?? 0;

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { auth } from "@/lib/auth";
+import { tenantCampaign } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,8 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
   if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
   const { id } = await ctx.params;
+  // Tenant wall: searching a campaign outside your tenant returns nothing.
+  if (!(await tenantCampaign(id))) return NextResponse.json({ results: [] });
   const q = (new URL(request.url).searchParams.get("q") ?? "").trim();
   if (q.length < 2) return NextResponse.json({ results: [] });
 

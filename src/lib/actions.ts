@@ -20,6 +20,7 @@ import {
   type TodoChannel,
 } from "@/db/schema";
 import { auth, signOut } from "./auth";
+import { assertTenantCampaign, sessionTenant, tenantCanSee } from "./tenant";
 
 export async function signOutAction() {
   await signOut({ redirectTo: "/login" });
@@ -243,6 +244,9 @@ export async function createCampaign(formData: FormData) {
     .insert(campaigns)
     .values({
       name,
+      // A campaign created in the UI belongs to its creator's tenant, so it
+      // renders only inside that tenant's portal (shared-engine isolation).
+      tenant: await sessionTenant(),
       smsTemplate,
       llmMode: llmModeValue,
       positionSummary: str(formData, "positionSummary"),
@@ -334,6 +338,7 @@ export async function createCampaign(formData: FormData) {
 }
 
 export async function deleteCampaign(campaignId: string) {
+  await assertTenantCampaign(campaignId); // never delete across the tenant wall
   await db.delete(campaigns).where(eq(campaigns.id, campaignId));
   revalidatePath("/");
   redirect("/");
@@ -360,6 +365,7 @@ export async function removeProfileImage() {
 }
 
 export async function updateCampaign(campaignId: string, formData: FormData) {
+  await assertTenantCampaign(campaignId);
   const scheduledAt = parseScheduledAt(formData);
   await db
     .update(campaigns)
@@ -387,6 +393,7 @@ export async function updateCampaign(campaignId: string, formData: FormData) {
 }
 
 export async function setCampaignStatus(campaignId: string, status: "active" | "paused" | "completed" | "draft") {
+  await assertTenantCampaign(campaignId);
   await db.update(campaigns).set({ status, updatedAt: new Date() }).where(eq(campaigns.id, campaignId));
   // Activate/Resume must actually START the pipeline, not just recolor the badge:
   // kick the drain so validation, scoring, and sending proceed on their own.
@@ -408,10 +415,11 @@ export async function setCampaignStatus(campaignId: string, status: "active" | "
 export async function saveCampaignTemplate(campaignId: string, formData: FormData): Promise<void> {
   const name = (str(formData, "templateName") ?? "").slice(0, 120);
   if (!name) return;
-  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId));
-  if (!campaign) return;
+  const campaign = await assertTenantCampaign(campaignId);
+  const tenant = await sessionTenant();
   const values = {
     name,
+    tenant,
     llmMode: campaign.llmMode,
     smsTemplate: campaign.smsTemplate,
     positionSummary: campaign.positionSummary,
@@ -423,19 +431,27 @@ export async function saveCampaignTemplate(campaignId: string, formData: FormDat
     targetRegion: campaign.targetRegion,
     minScoreToSend: campaign.minScoreToSend,
   };
-  // Same name = update in place, so "save" is always safe to press again.
-  await db
-    .insert(campaignTemplates)
-    .values(values)
-    .onConflictDoUpdate({ target: campaignTemplates.name, set: { ...values, updatedAt: new Date() } });
+  // Same name = update in place, so "save" is always safe to press again -
+  // matched WITHIN THIS TENANT only (uniqueness is per tenant now), so a
+  // customer's "Default" can never overwrite the house's "Default".
+  const [existing] = await db
+    .select({ id: campaignTemplates.id })
+    .from(campaignTemplates)
+    .where(and(eq(campaignTemplates.name, name), sql`coalesce(nullif(trim(${campaignTemplates.tenant}), ''), 'house') = ${tenant}`));
+  if (existing) {
+    await db.update(campaignTemplates).set({ ...values, updatedAt: new Date() }).where(eq(campaignTemplates.id, existing.id));
+  } else {
+    await db.insert(campaignTemplates).values(values);
+  }
   revalidatePath(`/campaigns/${campaignId}`);
 }
 
 export async function applyCampaignTemplate(campaignId: string, formData: FormData): Promise<void> {
   const templateId = str(formData, "templateId");
   if (!templateId) return;
+  await assertTenantCampaign(campaignId);
   const [t] = await db.select().from(campaignTemplates).where(eq(campaignTemplates.id, templateId));
-  if (!t) return;
+  if (!t || !tenantCanSee(await sessionTenant(), t.tenant)) return;
   // Blank template fields never wipe values the campaign already has (e.g. the
   // recruiter name a push filled in). A changed position summary invalidates the
   // cached scoring rubric so future fit scores use the new role context.
@@ -461,7 +477,10 @@ export async function applyCampaignTemplate(campaignId: string, formData: FormDa
 export async function deleteCampaignTemplate(campaignId: string, formData: FormData): Promise<void> {
   const templateId = str(formData, "templateId");
   if (!templateId) return;
-  await db.delete(campaignTemplates).where(eq(campaignTemplates.id, templateId));
+  const tenant = await sessionTenant();
+  await db
+    .delete(campaignTemplates)
+    .where(and(eq(campaignTemplates.id, templateId), sql`coalesce(nullif(trim(${campaignTemplates.tenant}), ''), 'house') = ${tenant}`));
   revalidatePath(`/campaigns/${campaignId}`);
 }
 
@@ -597,8 +616,7 @@ export async function deleteConversation(formData: FormData): Promise<void> {
 export async function sendCampaignBatch(campaignId: string): Promise<void> {
   const limit = Number(process.env.BATCH_SIZE ?? "10");
 
-  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId));
-  if (!campaign) throw new Error("Campaign not found");
+  const campaign = await assertTenantCampaign(campaignId);
 
   // FAIL-SAFE: same rule as the automated drain: no human-set send date & time,
   // no sending. startCampaignSend stamps "now" on an explicit Send click.
@@ -660,8 +678,7 @@ export async function sendCampaignBatch(campaignId: string): Promise<void> {
 }
 
 export async function startCampaignSend(campaignId: string): Promise<void> {
-  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId));
-  if (!campaign) throw new Error("Campaign not found");
+  await assertTenantCampaign(campaignId);
 
   // Score-first guard: don't text anyone while fit-scoring is still running, so
   // unqualified prospects are never messaged before they've been evaluated.

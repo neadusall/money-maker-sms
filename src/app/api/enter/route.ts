@@ -4,6 +4,7 @@ import { randomBytes } from "crypto";
 import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { users, sessions } from "@/db/schema";
+import { adoptLegacyTenantRows, normalizeTenant } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -52,6 +53,24 @@ export async function GET(req: Request) {
       .insert(users)
       .values({ email, name, emailVerified: new Date() })
       .returning();
+  }
+
+  // TENANT ISOLATION: the portal forwards which tenant this entry belongs to
+  // (?ws=house | ?ws=<customer label>), trusted only alongside the valid token
+  // (checked above). Re-stamped on every entry so it heals itself after any
+  // drift, and legacy untagged rows on this tenant's owner-email domain are
+  // adopted so a customer's history follows them into their tenant. A caller
+  // that sends NO ws (older portal build, legacy link) changes nothing - the
+  // user keeps their last-stamped tenant rather than falling open to house.
+  const wsRaw = url.searchParams.get("ws");
+  if (wsRaw !== null) {
+    const tenant = normalizeTenant(wsRaw);
+    if (normalizeTenant(user.tenant) !== tenant) {
+      await db.update(users).set({ tenant }).where(eq(users.id, user.id));
+    }
+    await adoptLegacyTenantRows(tenant, email).catch((err) =>
+      console.error("[enter] legacy tenant adoption failed:", err),
+    );
   }
 
   // Create a long-lived database session and set the Auth.js session cookie.

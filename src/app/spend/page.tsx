@@ -3,6 +3,7 @@ import { db } from "@/db/client";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { LiveBadge } from "@/components/LiveBadge";
 import { KpiCard, MiniStat } from "@/components/Stats";
+import { HOUSE_TENANT, sessionTenant } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,18 @@ async function many(q: Parameters<typeof db.execute>[0]): Promise<Record<string,
 }
 
 export default async function SpendPage() {
+  // The spend audit is the OPERATOR's cost view (infra totals, engine-wide
+  // message segments, enrichment). On a shared engine those numbers are house
+  // data, so non-house tenants get a quiet empty state instead of the ledger.
+  const tenant = await sessionTenant();
+  if (tenant !== HOUSE_TENANT) {
+    return (
+      <section>
+        <h1 className="text-2xl font-semibold tracking-tight">Spend</h1>
+        <p className="mt-2 text-sm text-zinc-600">Spend reporting is not available on this account.</p>
+      </section>
+    );
+  }
   const llm = await one(sql`
     SELECT coalesce(sum(cost_usd),0)::float AS total,
            coalesce(sum(cost_usd) FILTER (WHERE created_at >= date_trunc('month', now())),0)::float AS mtd,

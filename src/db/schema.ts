@@ -95,6 +95,10 @@ export const classificationLabel = pgEnum("classification_label", [
 export const campaigns = pgTable("campaigns", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
+  // Which portal tenant owns this campaign on a shared engine ("house" = the
+  // operator; a white-label customer gets its own label, e.g. its email
+  // domain). NULL = legacy row, treated as house everywhere (see lib/tenant).
+  tenant: text("tenant"),
   status: campaignStatus("status").default("draft").notNull(),
   llmMode: llmMode("llm_mode").default("draft_only").notNull(),
 
@@ -162,8 +166,10 @@ export const campaigns = pgTable("campaigns", {
  */
 export const campaignTemplates = pgTable("campaign_templates", {
   id: uuid("id").primaryKey().defaultRandom(),
-  // Unique: re-saving under the same name updates the template in place.
-  name: text("name").notNull().unique(),
+  // Unique PER TENANT (raw index in lib/tenant ensureTenantSchema): re-saving
+  // under the same name updates that tenant's template in place.
+  name: text("name").notNull(),
+  tenant: text("tenant"),
   llmMode: llmMode("llm_mode").default("draft_only").notNull(),
   smsTemplate: text("sms_template").notNull(),
   positionSummary: text("position_summary"),
@@ -438,6 +444,9 @@ export const users = pgTable("user", {
   email: text("email").unique(),
   emailVerified: timestamp("emailVerified", { mode: "date", withTimezone: true }),
   image: text("image"),
+  // Portal tenant this person belongs to, re-stamped on every SSO entry
+  // (/api/enter?ws=...). NULL = legacy/house (see lib/tenant).
+  tenant: text("tenant"),
 });
 
 export const accounts = pgTable(

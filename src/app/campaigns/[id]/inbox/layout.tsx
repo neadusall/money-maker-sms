@@ -1,7 +1,8 @@
 import { notFound } from "next/navigation";
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/db/client";
-import { campaigns, contacts, conversations, messages } from "@/db/schema";
+import { contacts, conversations, messages } from "@/db/schema";
+import { tenantCampaign } from "@/lib/tenant";
 import { ConversationList, type ConversationListItem } from "@/components/ConversationList";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +15,7 @@ export default async function InboxLayout({
   children: React.ReactNode;
 }) {
   const { id } = await params;
-  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, id));
+  const campaign = await tenantCampaign(id);
   if (!campaign) notFound();
 
   const lastMessagesSubquery = db

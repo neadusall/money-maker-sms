@@ -10,12 +10,17 @@ import { KpiCard, MiniStat, pct } from "@/components/Stats";
 import { OwnerChip, type KnownOwner } from "@/components/OwnerChip";
 import { sentimentOf } from "@/lib/sentiment";
 import { campaignFunnels } from "@/lib/campaign-stats";
+import { campaignTenantIs, sessionTenant } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
 type Sentiment = { positive: number; neutral: number; negative: number };
 
 export default async function Dashboard() {
+  // TENANT WALL: every list, total, and owner chip on this dashboard is scoped
+  // to the signed-in user's tenant - a house campaign must never render inside
+  // a white-label customer's portal (and vice versa).
+  const tenant = await sessionTenant();
   const camps = await db
     .select({
       id: campaigns.id,
@@ -27,6 +32,7 @@ export default async function Dashboard() {
       recruiterEmail: campaigns.recruiterEmail,
     })
     .from(campaigns)
+    .where(campaignTenantIs(tenant))
     .orderBy(desc(campaigns.createdAt));
 
   // Grouped aggregations (reliable; correlated subqueries were returning 0).

@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { eq, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { db } from "@/db/client";
-import { campaigns } from "@/db/schema";
+import { tenantCampaign } from "@/lib/tenant";
 import { restoreContact } from "@/lib/actions";
 import { formatPhone } from "@/lib/phone";
 import { CallButton } from "@/components/CallButton";
@@ -33,7 +33,7 @@ export default async function ArchivedPage({
   const { q: qRaw } = await searchParams;
   const q = (qRaw ?? "").trim();
 
-  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, id));
+  const campaign = await tenantCampaign(id);
   if (!campaign) notFound();
 
   const qLike = q ? "%" + q.toLowerCase().replace(/[\\%_]/g, (m) => "\\" + m) + "%" : null;

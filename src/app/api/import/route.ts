@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db/client";
 import { campaigns, contacts, suppressedNumbers } from "@/db/schema";
+import { HOUSE_TENANT, adoptLegacyTenantRows, campaignTenantIs, normalizeTenant } from "@/lib/tenant";
 import { normalizePhone } from "@/lib/phone";
 import { latestPhoneVerdicts } from "@/lib/phone-accuracy";
 import { isQStashConfigured, enqueueValidationDrain, enqueueScoreDrain } from "@/lib/schedule";
@@ -64,6 +65,9 @@ interface ImportBody {
     /** The pushing recruiter's assigned phone line (E.164): the campaign texts
      *  from the same number that recruiter calls from. */
     fromNumber?: string;
+    /** Which portal tenant this push belongs to ("house" when absent). On a
+     *  shared engine the campaign is visible ONLY inside that tenant. */
+    tenant?: string;
   };
   contacts?: ImportContact[];
   validate?: boolean;
@@ -123,13 +127,27 @@ export async function POST(req: Request) {
   // valid pushed number ties this campaign's texts to the recruiter's own line.
   const fromNumber = normalizePhone(clean(body.campaign?.fromNumber) ?? "") || null;
 
-  // Get-or-create the campaign by exact name, so repeat pushes of the same list
-  // top the campaign up instead of forking "Name (2)" copies.
+  // TENANT ISOLATION: the push is stamped with the portal workspace's tenant
+  // (absent = house, which legacy callers are). A customer's first tagged push
+  // also adopts their untagged legacy campaigns (matched by owner-email
+  // domain), so a re-push tops up the original campaign instead of forking a
+  // same-named copy in the new tenant.
+  const tenant = normalizeTenant(clean(body.campaign?.tenant));
+  if (tenant !== HOUSE_TENANT) {
+    await adoptLegacyTenantRows(tenant, clean(body.campaign?.recruiterEmail)).catch((err) =>
+      console.error("[import] legacy tenant adoption failed:", err),
+    );
+  }
+
+  // Get-or-create the campaign by exact name WITHIN THIS TENANT, so repeat
+  // pushes of the same list top the campaign up instead of forking "Name (2)"
+  // copies - and a house list can never be topped up by a customer's push (or
+  // vice versa) just because the names collide.
   let created = false;
   let [campaign] = await db
     .select()
     .from(campaigns)
-    .where(eq(campaigns.name, name))
+    .where(and(eq(campaigns.name, name), campaignTenantIs(tenant)))
     .orderBy(desc(campaigns.createdAt))
     .limit(1);
   if (!campaign) {
@@ -140,6 +158,7 @@ export async function POST(req: Request) {
       .insert(campaigns)
       .values({
         name,
+        tenant,
         status: "draft",
         smsTemplate: clean(body.campaign?.smsTemplate) ?? DEFAULT_TEMPLATE(name),
         positionSummary: clean(body.campaign?.positionSummary),
