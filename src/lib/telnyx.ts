@@ -1,6 +1,7 @@
 import Telnyx from "telnyx";
 import { TelnyxWebhook } from "telnyx";
 import { withOptOut } from "./opt-out";
+import { normalizePhone } from "./phone";
 
 let cached: Telnyx | null = null;
 
@@ -26,7 +27,13 @@ export async function sendSms(args: {
   internal?: boolean;
 }): Promise<SendResult> {
   const profileId = process.env.TELNYX_MESSAGING_PROFILE_ID;
-  const from = args.from ?? process.env.TELNYX_FROM_NUMBER;
+  // Normalize the SOURCE number to E.164. A recruiter typing "5162598279" (no
+  // +1) into the optional From field is stored raw and Telnyx rejects it as an
+  // invalid messaging source (error 40013), failing the whole send. Coerce it to
+  // "+15162598279"; if it can't be parsed to a valid number, drop it and let the
+  // messaging profile pool pick the line rather than fail every message.
+  const rawFrom = args.from ?? process.env.TELNYX_FROM_NUMBER;
+  const from = rawFrom ? normalizePhone(rawFrom) ?? undefined : undefined;
   if (!profileId && !from) {
     return { ok: false, error: "Set TELNYX_FROM_NUMBER or TELNYX_MESSAGING_PROFILE_ID" };
   }

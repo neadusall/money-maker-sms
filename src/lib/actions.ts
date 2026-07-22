@@ -68,6 +68,16 @@ function str(formData: FormData, key: string): string | null {
   return trimmed === "" ? null : trimmed;
 }
 
+// Normalize the optional campaign From number to E.164 on save, so Telnyx never
+// rejects it as an invalid messaging source (error 40013 - what a bare
+// "5162598279" without the +1 triggers). Kept raw only when it can't be parsed,
+// so an intentional entry is never silently wiped; the send path re-normalizes
+// as a backstop.
+function fromE164(formData: FormData): string | null {
+  const v = str(formData, "fromNumber");
+  return v ? normalizePhone(v) ?? v : null;
+}
+
 // Parse the optional "Schedule send" datetime-local field. The browser sends a
 // naive wall-clock string ("YYYY-MM-DDTHH:mm"); interpret it in APP_TIMEZONE.
 // Returns null when blank (no schedule) so the column clears.
@@ -270,7 +280,7 @@ export async function createCampaign(formData: FormData) {
       calendarLink: str(formData, "calendarLink"),
       recruiterName: str(formData, "recruiterName"),
       recruiterEmail: str(formData, "recruiterEmail"),
-      fromNumber: str(formData, "fromNumber"),
+      fromNumber: fromE164(formData),
       salesNavUrl: str(formData, "salesNavUrl"),
       targetRegion: str(formData, "targetRegion"),
       // Default fit bar: only text candidates scoring >= 50 unless changed.
@@ -394,7 +404,7 @@ export async function updateCampaign(campaignId: string, formData: FormData) {
       calendarLink: str(formData, "calendarLink"),
       recruiterName: str(formData, "recruiterName"),
       recruiterEmail: str(formData, "recruiterEmail"),
-      fromNumber: str(formData, "fromNumber"),
+      fromNumber: fromE164(formData),
       salesNavUrl: str(formData, "salesNavUrl"),
       targetRegion: str(formData, "targetRegion"),
       sendWindowStart: str(formData, "sendWindowStart") ?? undefined,
