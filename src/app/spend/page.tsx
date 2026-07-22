@@ -3,7 +3,7 @@ import { db } from "@/db/client";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { LiveBadge } from "@/components/LiveBadge";
 import { KpiCard, MiniStat } from "@/components/Stats";
-import { HOUSE_TENANT, sessionTenant } from "@/lib/tenant";
+import { HOUSE_TENANT, sessionViewer } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
@@ -35,9 +35,11 @@ async function many(q: Parameters<typeof db.execute>[0]): Promise<Record<string,
 export default async function SpendPage() {
   // The spend audit is the OPERATOR's cost view (infra totals, engine-wide
   // message segments, enrichment). On a shared engine those numbers are house
-  // data, so non-house tenants get a quiet empty state instead of the ledger.
-  const tenant = await sessionTenant();
-  if (tenant !== HOUSE_TENANT) {
+  // data, so non-house tenants get a quiet empty state instead of the ledger -
+  // and even inside the house tenant, only an admin/owner sees it (a regular
+  // recruiter has no business seeing the team's cost ledger).
+  const viewer = await sessionViewer();
+  if (viewer.tenant !== HOUSE_TENANT || !viewer.isAdmin) {
     return (
       <section>
         <h1 className="text-2xl font-semibold tracking-tight">Spend</h1>

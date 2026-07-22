@@ -10,17 +10,20 @@ import { KpiCard, MiniStat, pct } from "@/components/Stats";
 import { OwnerChip, type KnownOwner } from "@/components/OwnerChip";
 import { sentimentOf } from "@/lib/sentiment";
 import { campaignFunnels } from "@/lib/campaign-stats";
-import { campaignTenantIs, sessionTenant } from "@/lib/tenant";
+import { campaignVisibleTo, sessionViewer } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
 type Sentiment = { positive: number; neutral: number; negative: number };
 
 export default async function Dashboard() {
-  // TENANT WALL: every list, total, and owner chip on this dashboard is scoped
-  // to the signed-in user's tenant - a house campaign must never render inside
-  // a white-label customer's portal (and vice versa).
-  const tenant = await sessionTenant();
+  // TENANT WALL + PER-RECRUITER WALL: every list, total, and owner chip on this
+  // dashboard is scoped first to the viewer's tenant (a house campaign never
+  // renders inside a white-label portal), then - for a non-admin recruiter - to
+  // the campaigns assigned to THEM. A workspace admin/owner still sees the whole
+  // tenant. So a recruiter's board shows only their own desks; teammates' lists
+  // (and their candidates) are invisible, not just un-clickable.
+  const viewer = await sessionViewer();
   const camps = await db
     .select({
       id: campaigns.id,
@@ -32,7 +35,7 @@ export default async function Dashboard() {
       recruiterEmail: campaigns.recruiterEmail,
     })
     .from(campaigns)
-    .where(campaignTenantIs(tenant))
+    .where(campaignVisibleTo(viewer))
     .orderBy(desc(campaigns.createdAt));
 
   // Grouped aggregations (reliable; correlated subqueries were returning 0).

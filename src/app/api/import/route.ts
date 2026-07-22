@@ -3,6 +3,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db/client";
 import { campaigns, contacts, suppressedNumbers } from "@/db/schema";
 import { HOUSE_TENANT, adoptLegacyTenantRows, campaignTenantIs, normalizeTenant } from "@/lib/tenant";
+import { phonesClaimedByOtherCampaigns } from "@/lib/contact-dedup";
 import { normalizePhone } from "@/lib/phone";
 import { latestPhoneVerdicts } from "@/lib/phone-accuracy";
 import { isQStashConfigured, enqueueValidationDrain, enqueueScoreDrain } from "@/lib/schedule";
@@ -209,6 +210,18 @@ export async function POST(req: Request) {
   }
   const afterOptOut = normalized.filter((r) => !optedOut.has(r.phone));
 
+  // CROSS-RECRUITER DEDUPE: a contact already worked by ANOTHER campaign in this
+  // tenant is left out, so no candidate/client gets the same (or a similar) text
+  // from two recruiters on the team. First-campaign-wins, tenant-scoped, and the
+  // current campaign is excluded so a top-up re-push still tops itself up. See
+  // lib/contact-dedup for the exact rule.
+  const claimedElsewhere = await phonesClaimedByOtherCampaigns(
+    tenant,
+    campaign.id,
+    afterOptOut.map((r) => r.phone),
+  );
+  const afterClaim = afterOptOut.filter((r) => !claimedElsewhere.has(r.phone));
+
   // Default ON, and independent of QStash: an unvalidated contact must never
   // become textable just because the drain queue happens to be unconfigured.
   const validate = body.validate !== false;
@@ -220,18 +233,18 @@ export async function POST(req: Request) {
   // verdict now short-circuits: confirmed non-cells never enter the campaign,
   // confirmed cells land as "pending" without a second billed lookup.
   let verdicts = new Map<string, boolean>();
-  if (validate && afterOptOut.length) {
+  if (validate && afterClaim.length) {
     // Fail-open (an unavailable cache must not block imports) but LOUD: a
     // silent catch here once hid a broken query and re-enabled the churn.
-    verdicts = await latestPhoneVerdicts(afterOptOut.map((r) => r.phone)).catch((err) => {
+    verdicts = await latestPhoneVerdicts(afterClaim.map((r) => r.phone)).catch((err) => {
       console.warn("[import] verdict cache unavailable, validating everything:", err);
       return new Map();
     });
   }
   const knownNonMobile = validate
-    ? afterOptOut.filter((r) => verdicts.get(r.phone) === false).length
+    ? afterClaim.filter((r) => verdicts.get(r.phone) === false).length
     : 0;
-  const toInsert = validate ? afterOptOut.filter((r) => verdicts.get(r.phone) !== false) : afterOptOut;
+  const toInsert = validate ? afterClaim.filter((r) => verdicts.get(r.phone) !== false) : afterClaim;
 
   let added = 0;
   let confirmedCell = 0;
@@ -284,6 +297,9 @@ export async function POST(req: Request) {
     optedOut: optedOut.size,
     // in-payload dupes + already-in-campaign rows the unique index absorbed
     deduped: dupInPayload + (toInsert.length - added),
+    // Contacts skipped because another campaign in this tenant is already
+    // working them - the cross-recruiter no-double-contact guard.
+    claimedByOtherCampaign: claimedElsewhere.size,
     // Numbers a fresh Telnyx check already judged not a cell (landline, VoIP,
     // toll-free): left out rather than churned through validation again.
     knownNonMobile,

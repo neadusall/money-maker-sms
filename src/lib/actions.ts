@@ -20,7 +20,8 @@ import {
   type TodoChannel,
 } from "@/db/schema";
 import { auth, signOut } from "./auth";
-import { assertTenantCampaign, sessionTenant, tenantCanSee } from "./tenant";
+import { assertTenantCampaign, normalizeTenant, sessionTenant, tenantCanSee } from "./tenant";
+import { phonesClaimedByOtherCampaigns } from "./contact-dedup";
 
 export async function signOutAction() {
   await signOut({ redirectTo: "/login" });
@@ -146,9 +147,25 @@ async function categorizeUpload(
     .from(suppressedNumbers)
     .where(and(eq(suppressedNumbers.campaignId, campaignId), inArray(suppressedNumbers.phone, phones)));
 
+  // CROSS-RECRUITER DEDUPE: numbers a DIFFERENT campaign in this tenant already
+  // works are treated as duplicates too, so a CSV upload can't quietly double up
+  // on a candidate/client another recruiter is already texting. Tenant-scoped,
+  // self-excluding, first-campaign-wins (see lib/contact-dedup). Seed/always-allow
+  // numbers (e.g. your own line) stay exempt so you still seed every campaign.
+  const [camp] = await db
+    .select({ tenant: campaigns.tenant })
+    .from(campaigns)
+    .where(eq(campaigns.id, campaignId));
+  const claimedElsewhere = await phonesClaimedByOtherCampaigns(
+    normalizeTenant(camp?.tenant),
+    campaignId,
+    phones,
+  );
+
   const inCampaign = new Set<string>();
   for (const r of existing) if (!allow.has(r.phone)) inCampaign.add(r.phone);
   for (const r of supp) if (!allow.has(r.phone)) inCampaign.add(r.phone);
+  for (const p of claimedElsewhere) if (!allow.has(p)) inCampaign.add(p);
 
   const prev = skipPrev ? await previouslyTextedPhones(phones, campaignId) : new Set<string>();
   // ALWAYS skip numbers that have opted out (replied STOP) anywhere — regardless

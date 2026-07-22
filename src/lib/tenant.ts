@@ -1,7 +1,15 @@
-import { eq, sql, type SQL } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { campaigns, users } from "@/db/schema";
 import { auth } from "@/lib/auth";
+import {
+  HOUSE_TENANT,
+  type Viewer,
+  campaignVisibleTo,
+  isAdminEmail,
+  normalizeTenant,
+  viewerCanSeeCampaign,
+} from "./tenant-core";
 
 /**
  * Tenant isolation for the shared engine.
@@ -17,6 +25,12 @@ import { auth } from "@/lib/auth";
  *     portal on every SSO entry (/api/enter?ws=...), so it heals itself each
  *     time they open OS Text.
  *
+ * A SECOND wall sits on top: per-recruiter visibility (see tenant-core). Inside
+ * one tenant, a non-admin recruiter sees only the campaigns assigned to them;
+ * an admin/owner still sees the whole tenant. The pure predicates live in
+ * ./tenant-core (unit-tested, auth-free) and are re-exported here so existing
+ * `@/lib/tenant` imports keep working unchanged.
+ *
  * LEGACY ROWS ARE HOUSE: a NULL/blank tenant means the row predates isolation
  * and is treated as the operator's ("house"). That is fail-closed in the
  * privacy direction - an untagged row can never appear in a customer's view.
@@ -25,13 +39,16 @@ import { auth } from "@/lib/auth";
  * history follows them without any manual backfill.
  */
 
-export const HOUSE_TENANT = "house";
-
-/** Normalize a tenant label: NULL/blank (legacy) = house. */
-export function normalizeTenant(t: string | null | undefined): string {
-  const v = (t ?? "").trim().toLowerCase();
-  return v || HOUSE_TENANT;
-}
+export {
+  HOUSE_TENANT,
+  normalizeTenant,
+  campaignTenantIs,
+  tenantCanSee,
+  isAdminEmail,
+  campaignVisibleTo,
+  viewerCanSeeCampaign,
+  type Viewer,
+} from "./tenant-core";
 
 /** The signed-in user's tenant (house when unstamped, e.g. legacy sessions). */
 export async function sessionTenant(): Promise<string> {
@@ -42,26 +59,33 @@ export async function sessionTenant(): Promise<string> {
   return normalizeTenant(u?.tenant);
 }
 
-/** SQL predicate: this campaign row belongs to `tenant` (legacy NULL = house). */
-export function campaignTenantIs(tenant: string): SQL {
-  return sql`coalesce(nullif(trim(${campaigns.tenant}), ''), ${HOUSE_TENANT}) = ${tenant}`;
+/** Resolve who is looking: tenant + identity (for owner matching) + admin flag.
+ *  One DB read per request; feeds campaignVisibleTo / viewerCanSeeCampaign. */
+export async function sessionViewer(): Promise<Viewer> {
+  const session = await auth();
+  const uid = session?.user?.id;
+  const email = ((session?.user?.email ?? "") as string).trim().toLowerCase() || null;
+  const name = ((session?.user?.name ?? "") as string).trim().toLowerCase() || null;
+  let tenant = HOUSE_TENANT;
+  if (uid) {
+    const [u] = await db.select({ tenant: users.tenant }).from(users).where(eq(users.id, uid));
+    tenant = normalizeTenant(u?.tenant);
+  }
+  return { tenant, email, name, isAdmin: isAdminEmail(email) };
 }
 
-/** Row-level visibility check for an already-loaded row. */
-export function tenantCanSee(tenant: string, rowTenant: string | null | undefined): boolean {
-  return normalizeTenant(rowTenant) === tenant;
-}
-
-/** Load a campaign ONLY if the signed-in user's tenant may see it. The pages'
- *  drop-in replacement for `db.select().from(campaigns).where(id)`. */
+/** Load a campaign ONLY if the signed-in viewer may see it: same tenant AND
+ *  (admin OR the campaign is assigned to them). The pages' drop-in replacement
+ *  for `db.select().from(campaigns).where(id)`, so opening another recruiter's
+ *  campaign by URL 404s just like it never existed. */
 export async function tenantCampaign(id: string) {
   const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, id));
   if (!campaign) return null;
-  const tenant = await sessionTenant();
-  return tenantCanSee(tenant, campaign.tenant) ? campaign : null;
+  const viewer = await sessionViewer();
+  return viewerCanSeeCampaign(viewer, campaign) ? campaign : null;
 }
 
-/** Guard for mutations: throws unless the campaign is in the caller's tenant. */
+/** Guard for mutations: throws unless the viewer may see (own/admin) the campaign. */
 export async function assertTenantCampaign(id: string) {
   const campaign = await tenantCampaign(id);
   if (!campaign) throw new Error("Campaign not found");
