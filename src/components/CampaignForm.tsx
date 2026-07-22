@@ -1,6 +1,7 @@
 import type { Campaign } from "@/db/schema";
 import { REGIONS } from "@/lib/region";
 import { OPT_OUT_LINE } from "@/lib/opt-out";
+import { SaveButton } from "@/components/SaveButton";
 
 type Action = (formData: FormData) => Promise<void>;
 
@@ -211,12 +212,7 @@ export function CampaignForm({
       </Card>
 
       <div className="flex items-center justify-end gap-3">
-        <button
-          type="submit"
-          className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-white hover:bg-ink-soft"
-        >
-          {submitLabel ?? "Save campaign"}
-        </button>
+        <SaveButton label={submitLabel ?? "Save campaign"} />
       </div>
     </form>
   );
