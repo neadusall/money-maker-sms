@@ -2,15 +2,22 @@ import Telnyx from "telnyx";
 import { TelnyxWebhook } from "telnyx";
 import { withOptOut } from "./opt-out";
 import { normalizePhone } from "./phone";
+import type { TelnyxCreds } from "./tenant-telnyx";
 
-let cached: Telnyx | null = null;
+// One client per API key: the house account plus any per-tenant account
+// (a white-label workspace texting through its own Telnyx). Keyed by the key
+// itself so a tenant's sends never ride another account's client.
+const clients = new Map<string, Telnyx>();
 
-function client(): Telnyx {
-  if (cached) return cached;
-  const key = process.env.TELNYX_API_KEY;
+function client(apiKey?: string): Telnyx {
+  const key = apiKey || process.env.TELNYX_API_KEY;
   if (!key) throw new Error("TELNYX_API_KEY is not set");
-  cached = new Telnyx({ apiKey: key });
-  return cached;
+  let c = clients.get(key);
+  if (!c) {
+    c = new Telnyx({ apiKey: key });
+    clients.set(key, c);
+  }
+  return c;
 }
 
 export type SendResult =
@@ -25,8 +32,12 @@ export async function sendSms(args: {
   // opt-out footer (a STOP instruction on an internal alert invites the
   // recruiter to opt their own cell out of the platform).
   internal?: boolean;
+  // Per-tenant Telnyx account to send through (a white-label workspace on its
+  // own Telnyx). Omitted → the house account in the global env.
+  creds?: TelnyxCreds;
 }): Promise<SendResult> {
-  const profileId = process.env.TELNYX_MESSAGING_PROFILE_ID;
+  const apiKey = args.creds?.apiKey || process.env.TELNYX_API_KEY;
+  const profileId = args.creds?.messagingProfileId ?? process.env.TELNYX_MESSAGING_PROFILE_ID;
   // Normalize the SOURCE number to E.164. A recruiter typing "5162598279" (no
   // +1) into the optional From field is stored raw and Telnyx rejects it as an
   // invalid messaging source (error 40013), failing the whole send. Coerce it to
@@ -34,11 +45,12 @@ export async function sendSms(args: {
   // messaging profile pool pick the line rather than fail every message.
   const rawFrom = args.from ?? process.env.TELNYX_FROM_NUMBER;
   const from = rawFrom ? normalizePhone(rawFrom) ?? undefined : undefined;
+  if (!apiKey) return { ok: false, error: "TELNYX_API_KEY is not set" };
   if (!profileId && !from) {
     return { ok: false, error: "Set TELNYX_FROM_NUMBER or TELNYX_MESSAGING_PROFILE_ID" };
   }
   try {
-    const res = await client().messages.send({
+    const res = await client(apiKey).messages.send({
       to: args.to,
       text: args.internal ? args.body : withOptOut(args.body),
       ...(from ? { from } : {}),

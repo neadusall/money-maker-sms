@@ -2,6 +2,7 @@ import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { campaigns, contacts, conversations, messages, scheduledMessages } from "@/db/schema";
 import { lookupLineType, sendSms } from "./telnyx";
+import { telnyxCredsForTenant } from "./tenant-telnyx";
 import { isAlwaysAllowed } from "./always-allow";
 import { recordPhoneCheck, latestPhoneVerdicts } from "./phone-accuracy";
 import { processContactSend } from "./send";
@@ -414,6 +415,7 @@ export async function dispatchScheduledMessage(scheduledMessageId: string): Prom
     to: contact.phone,
     body: scheduled.body,
     from: campaign?.fromNumber ?? undefined,
+    creds: telnyxCredsForTenant(campaign?.tenant),
   });
 
   if (!result.ok) {

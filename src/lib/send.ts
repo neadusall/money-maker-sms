@@ -3,6 +3,7 @@ import { db } from "@/db/client";
 import { contacts, conversations, messages, suppressedNumbers, type Campaign, type Contact } from "@/db/schema";
 import { renderTemplate, findUnmergedTokens } from "./merge";
 import { sendSms } from "./telnyx";
+import { telnyxCredsForTenant } from "./tenant-telnyx";
 import { paceForNextSend } from "./pacing";
 import { isAlwaysAllowed } from "./always-allow";
 
@@ -122,7 +123,12 @@ export async function processContactSend(
   }
 
   await paceForNextSend();
-  const result = await sendSms({ to: contact.phone, body, from: campaign.fromNumber ?? undefined });
+  const result = await sendSms({
+    to: contact.phone,
+    body,
+    from: campaign.fromNumber ?? undefined,
+    creds: telnyxCredsForTenant(campaign.tenant),
+  });
 
   if (!result.ok) {
     await db
