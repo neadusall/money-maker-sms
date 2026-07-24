@@ -119,7 +119,13 @@ export async function getTelnyxConnection(): Promise<TelnyxConnection> {
     base.profileEnabled = profile.enabled !== false;
     base.webhookUrlActual = (profile.webhook_url as string) || null;
     base.webhookApiVersion = (profile.webhook_api_version as string) ?? null;
-    base.webhookUrlOk = sameUrl(base.webhookUrlActual ?? "", expected);
+    const actual = base.webhookUrlActual ?? "";
+    // Prefer an exact match to the expected URL. But if PUBLIC_APP_URL/AUTH_URL
+    // is not set in this environment we cannot compute an expected URL, so fall
+    // back to "does it point at our inbound webhook path over https" rather than
+    // crying wolf with a false mismatch.
+    const pathLooksRight = /^https:\/\/.+\/api\/webhooks\/telnyx\/?$/i.test(actual);
+    base.webhookUrlOk = expected ? sameUrl(actual, expected) : pathLooksRight;
   }
 
   // Numbers assigned to the profile (proves the sending number is live).
@@ -327,13 +333,49 @@ export function summarize(
   return { status, issues };
 }
 
-/** One call that runs every check and returns the full report. */
+const EMPTY_SMS: SmsHealth = {
+  outbound24h: 0, outbound7d: 0, outboundAll: 0, deliveredAll: 0, failedAll: 0,
+  pendingAll: 0, deliveryRate: 0, inbound24h: 0, inbound7d: 0, inboundAll: 0,
+  lastInbound: null, lastOutbound: null, deliveryReceiptsSeen: false,
+};
+
+/**
+ * One call that runs every check and returns the full report. Each check is
+ * isolated so a single failure (e.g. a momentary DB blip) degrades gracefully
+ * instead of blanking the whole status page.
+ */
 export async function getHealthReport(): Promise<HealthReport> {
-  const [telnyx, sms, recruiters] = await Promise.all([
+  const [telnyxR, smsR, recruitersR] = await Promise.allSettled([
     getTelnyxConnection(),
     getSmsHealth(),
     getRecruiterBreakdown(),
   ]);
+
+  const telnyx: TelnyxConnection =
+    telnyxR.status === "fulfilled"
+      ? telnyxR.value
+      : {
+          apiKeySet: !!process.env.TELNYX_API_KEY,
+          reachable: false,
+          profileId: process.env.TELNYX_MESSAGING_PROFILE_ID || null,
+          profileFound: false,
+          profileName: null,
+          profileEnabled: false,
+          webhookUrlActual: null,
+          webhookUrlExpected: expectedWebhookUrl(),
+          webhookUrlOk: false,
+          webhookApiVersion: null,
+          publicKeySet: !!process.env.TELNYX_PUBLIC_KEY,
+          fromNumberSet: !!process.env.TELNYX_FROM_NUMBER,
+          numbers: [],
+          error: "health check failed",
+        };
+  const sms = smsR.status === "fulfilled" ? smsR.value : EMPTY_SMS;
+  const recruiters = recruitersR.status === "fulfilled" ? recruitersR.value : [];
+
   const { status, issues } = summarize(telnyx, sms, recruiters);
+  if (smsR.status === "rejected") {
+    issues.unshift("Could not read the message database for this check. Metrics may be incomplete.");
+  }
   return { status, checkedAt: new Date().toISOString(), telnyx, sms, recruiters, issues };
 }

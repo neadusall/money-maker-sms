@@ -4,6 +4,7 @@ import { randomBytes } from "crypto";
 import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { users, sessions } from "@/db/schema";
+import { SESSION_COOKIE } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -49,13 +50,14 @@ export async function GET(req: Request) {
   const expires = new Date(Date.now() + ONE_YEAR_MS);
   await db.insert(sessions).values({ sessionToken, userId: user.id, expires });
 
-  const secure = (process.env.AUTH_URL ?? "").startsWith("https");
-  const cookieName = secure ? "__Secure-authjs.session-token" : "authjs.session-token";
+  // Use the shared cookie config so this matches what Auth.js reads/writes.
+  // SameSite=None; Secure is what lets OS Text load inside the portal iframe on
+  // cross-site domains (app.lumesp.com and white-label custom domains).
   const jar = await cookies();
-  jar.set(cookieName, sessionToken, {
+  jar.set(SESSION_COOKIE.name, sessionToken, {
     httpOnly: true,
-    secure,
-    sameSite: "lax",
+    secure: SESSION_COOKIE.secure,
+    sameSite: SESSION_COOKIE.sameSite,
     path: "/",
     expires,
   });
