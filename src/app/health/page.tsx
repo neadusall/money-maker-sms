@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { LiveBadge } from "@/components/LiveBadge";
 import { KpiCard, MiniStat } from "@/components/Stats";
+import { SelfTestCard } from "@/components/SelfTestCard";
 import { getHealthReport, type OverallStatus } from "@/lib/health";
 
 export const dynamic = "force-dynamic";
@@ -66,6 +67,9 @@ export default async function HealthPage() {
           )}
         </div>
       </div>
+
+      {/* Two-way SMS self-test */}
+      <SelfTestCard senders={report.senders} />
 
       {/* Telnyx connection */}
       <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
