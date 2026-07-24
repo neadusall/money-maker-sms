@@ -246,6 +246,24 @@ export async function getRecruiterBreakdown(): Promise<RecruiterRow[]> {
   });
 }
 
+export type Sender = { recruiter: string; fromNumber: string };
+
+/** Distinct sending numbers in use, labelled by recruiter, for the self-test picker. */
+export async function getSenders(): Promise<Sender[]> {
+  const r = (await db.execute(sql`
+    SELECT DISTINCT
+      coalesce(nullif(trim(recruiter_name), ''), 'Unassigned') AS recruiter,
+      from_number
+    FROM campaigns
+    WHERE from_number IS NOT NULL AND trim(from_number) <> ''
+    ORDER BY recruiter ASC
+  `)) as { rows?: Record<string, unknown>[] };
+  return (r.rows ?? []).map((row) => ({
+    recruiter: String(row.recruiter ?? "Unassigned"),
+    fromNumber: String(row.from_number ?? ""),
+  })).filter((s) => s.fromNumber);
+}
+
 export type OverallStatus = "ok" | "degraded" | "down";
 
 export type HealthReport = {
@@ -254,6 +272,7 @@ export type HealthReport = {
   telnyx: TelnyxConnection;
   sms: SmsHealth;
   recruiters: RecruiterRow[];
+  senders: Sender[];
   issues: string[];
 };
 
@@ -345,10 +364,11 @@ const EMPTY_SMS: SmsHealth = {
  * instead of blanking the whole status page.
  */
 export async function getHealthReport(): Promise<HealthReport> {
-  const [telnyxR, smsR, recruitersR] = await Promise.allSettled([
+  const [telnyxR, smsR, recruitersR, sendersR] = await Promise.allSettled([
     getTelnyxConnection(),
     getSmsHealth(),
     getRecruiterBreakdown(),
+    getSenders(),
   ]);
 
   const telnyx: TelnyxConnection =
@@ -372,10 +392,11 @@ export async function getHealthReport(): Promise<HealthReport> {
         };
   const sms = smsR.status === "fulfilled" ? smsR.value : EMPTY_SMS;
   const recruiters = recruitersR.status === "fulfilled" ? recruitersR.value : [];
+  const senders = sendersR.status === "fulfilled" ? sendersR.value : [];
 
   const { status, issues } = summarize(telnyx, sms, recruiters);
   if (smsR.status === "rejected") {
     issues.unshift("Could not read the message database for this check. Metrics may be incomplete.");
   }
-  return { status, checkedAt: new Date().toISOString(), telnyx, sms, recruiters, issues };
+  return { status, checkedAt: new Date().toISOString(), telnyx, sms, recruiters, senders, issues };
 }
