@@ -31,6 +31,7 @@ import { regionForLocation, type RegionKey } from "./region";
 import { alwaysAllowNumbers } from "./always-allow";
 import { seedContacts } from "./seed-contacts";
 import { sendSms } from "./telnyx";
+import { telnyxCredsForTenant } from "./tenant-telnyx";
 import { processContactSend } from "./send";
 import { normalizePhone } from "./phone";
 import { isStopKeyword } from "./opt-out";
@@ -1177,6 +1178,7 @@ async function classifyInboundSilent(args: {
           to: args.contact.phone,
           body: draft,
           from: args.campaign.fromNumber ?? undefined,
+          creds: telnyxCredsForTenant(args.campaign.tenant),
         });
         if (send.ok) {
           await db.insert(messages).values({
@@ -1260,6 +1262,7 @@ export async function sendManualReply(
     to: contact.phone,
     body,
     from: campaign?.fromNumber ?? undefined,
+    creds: telnyxCredsForTenant(campaign?.tenant),
   });
 
   if (!result.ok) {
