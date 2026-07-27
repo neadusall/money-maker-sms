@@ -3,7 +3,10 @@ import { auth } from "@/lib/auth";
 
 // /api/import, /api/phone-accuracy, and /api/kpi-stats are public here but do
 // their own shared-secret Bearer auth (ACCESS_TOKEN), same trust model as /api/enter.
-const PUBLIC_PATHS = ["/login", "/verify-request", "/api/auth", "/api/webhooks", "/api/qstash", "/api/enter", "/api/import", "/api/phone-accuracy", "/api/kpi-stats"];
+// /api/health is public by design: the container healthcheck, deploy-tick
+// probe, and standalone watchdog all need an unauthenticated 200 that proves
+// the right build is serving (it returns a static ok, nothing sensitive).
+const PUBLIC_PATHS = ["/login", "/verify-request", "/api/auth", "/api/webhooks", "/api/qstash", "/api/enter", "/api/import", "/api/phone-accuracy", "/api/kpi-stats", "/api/health"];
 
 // Must mirror next.config.ts basePath. The auth()-wrapped request reaches this
 // proxy with the basePath still on nextUrl.pathname (observed in production:
