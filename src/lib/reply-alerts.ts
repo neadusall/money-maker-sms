@@ -10,6 +10,7 @@ import {
   type Contact,
 } from "@/db/schema";
 import { sendSms } from "./telnyx";
+import { telnyxCredsForTenant } from "./tenant-telnyx";
 import { normalizePhone } from "./phone";
 
 /**
@@ -101,6 +102,10 @@ async function deliver(args: {
   recipients: string[];
   body: string;
   fromNumber: string | null;
+  // The alert sends from the campaign's line; a white-label tenant's line
+  // lives on ITS Telnyx account, so the send must route through the same
+  // per-tenant creds the campaign sends use (else Telnyx 10010 rejects it).
+  tenant: string | null;
 }): Promise<boolean> {
   let anyOk = false;
   for (const to of args.recipients) {
@@ -109,6 +114,7 @@ async function deliver(args: {
       body: args.body,
       from: args.fromNumber ?? undefined,
       internal: true,
+      creds: telnyxCredsForTenant(args.tenant),
     });
     if (res.ok) anyOk = true;
     else console.warn(`[reply-alerts] send to ${to} failed: ${res.error}`);
@@ -176,7 +182,12 @@ export async function recordReplyAlert(args: {
     `New reply: ${candidateName(contact)} (${campaign.name}) said "${snippet(inboundBody)}". ` +
     `They are waiting on you. Get in the tool and respond.`;
 
-  const sent = await deliver({ recipients, body, fromNumber: campaign.fromNumber });
+  const sent = await deliver({
+    recipients,
+    body,
+    fromNumber: campaign.fromNumber,
+    tenant: campaign.tenant,
+  });
   if (sent) {
     const priorCount = freshCycle ? 0 : (existing?.alertCount ?? 0);
     await db
@@ -284,7 +295,12 @@ export async function sweepReplyAlerts(): Promise<{ nagged: number; resolved: nu
       `${isFinal ? "Final reminder" : "Reminder"}: ${candidateName(contact)} (${campaign.name}) replied ${waitingLabel(Date.now() - alert.lastInboundAt.getTime())} ago ` +
       `and still has no response from you. Get in the tool and reply.`;
 
-    const sent = await deliver({ recipients, body, fromNumber: campaign.fromNumber });
+    const sent = await deliver({
+      recipients,
+      body,
+      fromNumber: campaign.fromNumber,
+      tenant: campaign.tenant,
+    });
     if (sent) {
       await db
         .update(replyAlerts)
