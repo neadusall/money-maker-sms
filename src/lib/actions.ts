@@ -1185,7 +1185,8 @@ async function classifyInboundSilent(args: {
             conversationId: args.conversationId,
             direction: "outbound",
             status: "sent",
-            body: draft,
+            // Store the delivered text (footer included), not the raw draft.
+            body: send.text,
             telnyxId: send.telnyxId,
           });
           // Keep the thread flagged for the recruiter even after the AI replies —
@@ -1273,7 +1274,8 @@ export async function sendManualReply(
     conversationId,
     direction: "outbound",
     status: "sent",
-    body,
+    // Store the delivered text (footer included), not what was typed.
+    body: result.text,
     telnyxId: result.telnyxId,
   });
   await db

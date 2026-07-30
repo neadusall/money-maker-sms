@@ -430,7 +430,8 @@ export async function dispatchScheduledMessage(scheduledMessageId: string): Prom
     conversationId: scheduled.conversationId,
     direction: "outbound",
     status: "sent",
-    body: scheduled.body,
+    // Store the delivered text (footer included), not the queued draft.
+    body: result.text,
     telnyxId: result.telnyxId,
   });
   // Do NOT clear the conversation flag when the AI auto-replies. The recruiter

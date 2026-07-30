@@ -31,9 +31,27 @@ export function isHelpKeyword(body: string): boolean {
 
 export const OPT_OUT_LINE = "Reply STOP to opt out.";
 
-/** True if the text already carries STOP opt-out language (so we don't double it). */
+/**
+ * True if the text already tells the recipient how to stop hearing from us, in
+ * ANY of the phrasings carriers accept - not just our own footer's wording.
+ *
+ * The old check demanded the literal shape "stop ... opt out", so a template
+ * that already said "Reply STOP to unsubscribe" or "Text STOP to end" got a
+ * SECOND instruction stapled on: two contradictory footers, and an extra
+ * segment billed on every message. Recognizing the whole family keeps the
+ * append idempotent for real-world templates.
+ *
+ * Deliberately narrow in one direction: the STOP keyword must appear as its own
+ * word, so prose like "stop by the office" is not mistaken for a notice and the
+ * footer still gets added.
+ */
 export function hasOptOut(text: string): boolean {
-  return /\bstop\b[\s\S]*?opt[\s-]?out/i.test(text);
+  // "reply/text/send STOP", optionally "reply STOP to <anything>".
+  if (/\b(reply|text|send|txt)\s+["']?stop\b/i.test(text)) return true;
+  // "STOP to opt out / unsubscribe / cancel / end / quit".
+  if (/\bstop\b\s*(to|=|:)?\s*(opt[\s-]?out|unsubscribe|cancel|end|quit)/i.test(text)) return true;
+  // Our own footer, or any wording that pairs STOP with opting out later in the line.
+  return /\bstop\b[\s\S]{0,40}?opt[\s-]?out/i.test(text);
 }
 
 /** Append the opt-out line to a message body. Idempotent. */

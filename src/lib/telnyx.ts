@@ -21,7 +21,13 @@ function client(apiKey?: string): Telnyx {
 }
 
 export type SendResult =
-  | { ok: true; telnyxId: string }
+  // `text` is the EXACT string handed to Telnyx, opt-out footer included.
+  // Callers persist this rather than their own pre-footer body, so the messages
+  // table is a faithful record of what the recipient actually received - the
+  // thing a carrier audit asks for. Storing the pre-footer body made the DB
+  // look like 99% of sends carried no STOP instruction when every one of them
+  // did; the evidence has to match the wire.
+  | { ok: true; telnyxId: string; text: string }
   | { ok: false; error: string };
 
 export async function sendSms(args: {
@@ -49,16 +55,21 @@ export async function sendSms(args: {
   if (!profileId && !from) {
     return { ok: false, error: "Set TELNYX_FROM_NUMBER or TELNYX_MESSAGING_PROFILE_ID" };
   }
+  // The opt-out footer is applied HERE, at the single chokepoint every
+  // candidate-facing send passes through, and it is opt-OUT rather than opt-in:
+  // a new call site that forgets about compliance still gets it. Only
+  // `internal: true` (alerts to our own recruiters' cells) skips it.
+  const text = args.internal ? args.body : withOptOut(args.body);
   try {
     const res = await client(apiKey).messages.send({
       to: args.to,
-      text: args.internal ? args.body : withOptOut(args.body),
+      text,
       ...(from ? { from } : {}),
       ...(profileId ? { messaging_profile_id: profileId } : {}),
     });
     const id = res.data?.id;
     if (!id) return { ok: false, error: "Telnyx response missing message id" };
-    return { ok: true, telnyxId: id };
+    return { ok: true, telnyxId: id, text };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { ok: false, error: message };

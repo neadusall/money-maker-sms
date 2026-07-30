@@ -143,7 +143,10 @@ export async function processContactSend(
     conversationId: convo.id,
     direction: "outbound",
     status: "sent",
-    body,
+    // What Telnyx actually delivered, opt-out footer included - not the
+    // pre-footer render. The thread and any compliance export then show the
+    // recipient's real message.
+    body: result.text,
     telnyxId: result.telnyxId,
   });
   await db.update(contacts).set({ status: "sent", lastError: null }).where(eq(contacts.id, contact.id));
