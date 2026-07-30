@@ -13,7 +13,7 @@ import { AutoRefresh } from "@/components/AutoRefresh";
 import { LiveBadge } from "@/components/LiveBadge";
 import { formatPhone } from "@/lib/phone";
 import { linkedinLink } from "@/lib/linkedin";
-import { campaignVisibleTo, sessionViewer } from "@/lib/tenant";
+import { campaignOwnedBy, campaignVisibleTo, sessionViewer } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
@@ -32,9 +32,13 @@ export default async function TodosPage({
 }) {
   const sp = await searchParams;
   const channel = sp.channel && sp.channel !== "all" ? sp.channel : null;
-  // Tenant + per-recruiter wall: the board only shows to-dos from campaigns the
-  // viewer may see (their own desks; admins see the whole tenant).
+  // Tenant wall: the board only shows to-dos from campaigns the viewer may see.
+  // Unlike the campaign dashboard this is a WORK QUEUE, so the default view is
+  // whatever it was before the board went shared - a recruiter opens on their
+  // own actions, an admin on the whole workspace - and the Mine/Everyone pills
+  // let anyone switch. Nothing is hidden either way; only the default differs.
   const viewer = await sessionViewer();
+  const mineOnly = (sp.view ?? (viewer.isAdmin ? "everyone" : "mine")) === "mine";
 
   // Show ALL to-dos (open AND done) — marking one done just checks it off in
   // place; it stays on the board until explicitly deleted with the trash icon.
@@ -68,7 +72,14 @@ export default async function TodosPage({
     .from(todos)
     .innerJoin(contacts, eq(contacts.id, todos.contactId))
     .innerJoin(campaigns, eq(campaigns.id, todos.campaignId))
-    .where(and(isNull(contacts.deletedAt), campaignVisibleTo(viewer), channel ? eq(todos.channel, channel as TodoChannel) : undefined))
+    .where(
+      and(
+        isNull(contacts.deletedAt),
+        campaignVisibleTo(viewer),
+        mineOnly ? campaignOwnedBy(viewer) : undefined,
+        channel ? eq(todos.channel, channel as TodoChannel) : undefined,
+      ),
+    )
     .orderBy(desc(todos.createdAt))
     .limit(1000);
 
@@ -82,6 +93,7 @@ export default async function TodosPage({
       contactId: string;
       name: string;
       sub: string;
+      owner: string;
       phone: string;
       company: string | null;
       campaignId: string;
@@ -110,6 +122,7 @@ export default async function TodosPage({
         contactId: r.contactId,
         name,
         sub,
+        owner: (r.recruiterName ?? "").trim(),
         phone: r.phone,
         company: r.company,
         campaignId: r.campaignId,
@@ -130,6 +143,15 @@ export default async function TodosPage({
   // Stable order — everyone stays on the board. The read checkmark only marks
   // which candidates Ryan has already looked at; it never removes or hides them.
   const grouped = [...groups.values()];
+
+  // Keeps the channel filter and the Mine/Everyone view together in one URL, so
+  // switching either never silently resets the other.
+  const boardHref = (nextChannel: string, nextView: string) => {
+    const qs = new URLSearchParams();
+    if (nextChannel !== "all") qs.set("channel", nextChannel);
+    qs.set("view", nextView);
+    return `/todos?${qs.toString()}`;
+  };
 
   // CSV export of the current board — one row per candidate, respects the active
   // channel filter. Includes their LinkedIn URL + contact details + fit score.
@@ -163,22 +185,37 @@ export default async function TodosPage({
         <DownloadListButton rows={exportRows} filename={`todos-${channel ?? "all"}.csv`} />
       </div>
 
-      <div className="flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
         {CHANNELS.map((c) => {
           const active = (channel ?? "all") === c.value;
-          const qs = new URLSearchParams();
-          if (c.value !== "all") qs.set("channel", c.value);
-          const href = `/todos${qs.toString() ? `?${qs.toString()}` : ""}`;
           return (
             <Link
               key={c.value}
-              href={href}
+              href={boardHref(c.value, mineOnly ? "mine" : "everyone")}
               className={"rounded-full px-3 py-1 text-xs font-medium " + (active ? "bg-sky-600 text-white" : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200")}
             >
               {c.label}
             </Link>
           );
         })}
+        <span className="mx-1 h-4 w-px bg-zinc-200" aria-hidden />
+        {[
+          { key: "mine", label: "Mine" },
+          { key: "everyone", label: "Everyone" },
+        ].map((t) => (
+          <Link
+            key={t.key}
+            href={boardHref(channel ?? "all", t.key)}
+            className={
+              "rounded-full px-3 py-1 text-xs font-medium " +
+              ((mineOnly ? "mine" : "everyone") === t.key
+                ? "bg-zinc-800 text-white"
+                : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200")
+            }
+          >
+            {t.label}
+          </Link>
+        ))}
       </div>
 
       {grouped.length === 0 ? (
@@ -234,7 +271,12 @@ export default async function TodosPage({
                         </span>
                       ) : null}
                     </div>
-                    <p className="truncate text-xs text-zinc-500">{g.sub}</p>
+                    <p className="truncate text-xs text-zinc-500">
+                      {g.sub}
+                      {/* On the shared view, say whose desk this is so nobody
+                          works a teammate's candidate by accident. */}
+                      {!mineOnly && g.owner ? <span className="text-zinc-400"> · {g.owner}</span> : null}
+                    </p>
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">

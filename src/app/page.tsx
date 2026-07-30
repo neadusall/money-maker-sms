@@ -10,21 +10,26 @@ import { KpiCard, MiniStat, pct } from "@/components/Stats";
 import { OwnerChip, type KnownOwner } from "@/components/OwnerChip";
 import { sentimentOf } from "@/lib/sentiment";
 import { campaignFunnels } from "@/lib/campaign-stats";
-import { campaignVisibleTo, sessionViewer } from "@/lib/tenant";
+import { campaignVisibleTo, sessionViewer, viewerOwnsCampaign } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
 type Sentiment = { positive: number; neutral: number; negative: number };
 
-export default async function Dashboard() {
-  // TENANT WALL + PER-RECRUITER WALL: every list, total, and owner chip on this
-  // dashboard is scoped first to the viewer's tenant (a house campaign never
-  // renders inside a white-label portal), then - for a non-admin recruiter - to
-  // the campaigns assigned to THEM. A workspace admin/owner still sees the whole
-  // tenant. So a recruiter's board shows only their own desks; teammates' lists
-  // (and their candidates) are invisible, not just un-clickable.
+export default async function Dashboard({
+  searchParams,
+}: {
+  searchParams: Promise<{ owner?: string }>;
+}) {
+  // TENANT WALL: every list, total, and owner chip on this dashboard is scoped
+  // to the viewer's tenant, so a house campaign never renders inside a
+  // white-label portal. Inside the tenant the board is SHARED - a recruiter
+  // sees the whole workspace, with the owner chip saying whose desk each
+  // campaign is and the Mine pill below narrowing to their own.
+  const sp = await searchParams;
+  const mineOnly = (sp.owner ?? "") === "mine";
   const viewer = await sessionViewer();
-  const camps = await db
+  const visible = await db
     .select({
       id: campaigns.id,
       name: campaigns.name,
@@ -37,6 +42,10 @@ export default async function Dashboard() {
     .from(campaigns)
     .where(campaignVisibleTo(viewer))
     .orderBy(desc(campaigns.createdAt));
+  // "Mine" is a view filter, not a wall: both counts come from the one visible
+  // set, so the pills can show what switching would reveal.
+  const mineCount = visible.filter((c) => viewerOwnsCampaign(viewer, c)).length;
+  const camps = mineOnly ? visible.filter((c) => viewerOwnsCampaign(viewer, c)) : visible;
 
   // Grouped aggregations (reliable; correlated subqueries were returning 0).
   // Contact rows carry only pipeline state here (totals, opt-outs, emails):
@@ -114,7 +123,7 @@ export default async function Dashboard() {
   // popover offers one-click reassignment to a known teammate.
   const knownOwners: KnownOwner[] = [];
   const seenOwners = new Set<string>();
-  for (const c of camps) {
+  for (const c of visible) {
     const name = (c.recruiterName ?? "").trim();
     const email = (c.recruiterEmail ?? "").trim();
     const key = (name || email).toLowerCase();
@@ -133,7 +142,7 @@ export default async function Dashboard() {
             <LiveBadge />
           </div>
           <p className="mt-1 text-sm text-zinc-600">
-            {rows.length === 0
+            {visible.length === 0
               ? "Create your first SMS recruiting campaign."
               : `${rows.length} campaign${rows.length === 1 ? "" : "s"} · ${activeCount} active`}
           </p>
@@ -149,7 +158,42 @@ export default async function Dashboard() {
         </Link>
       </div>
 
-      {rows.length === 0 ? (
+      {/* Shared board: everyone in the workspace sees every campaign here, so a
+          teammate's search is never missing. Mine narrows to your own desks. */}
+      {visible.length > 0 ? (
+        <div className="mt-4 flex flex-wrap items-center gap-1.5">
+          {[
+            { key: "", label: `Everyone (${visible.length})` },
+            { key: "mine", label: `Mine (${mineCount})` },
+          ].map((t) => {
+            const active = (mineOnly ? "mine" : "") === t.key;
+            return (
+              <Link
+                key={t.key || "all"}
+                href={t.key ? `/?owner=${t.key}` : "/"}
+                className={
+                  "rounded-full px-3 py-1 text-xs font-medium " +
+                  (active ? "bg-sky-600 text-white" : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200")
+                }
+              >
+                {t.label}
+              </Link>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {rows.length === 0 && mineOnly ? (
+        <div className="mt-6 rounded-xl border border-dashed border-zinc-300 bg-surface p-8 text-center">
+          <h2 className="text-sm font-semibold text-zinc-700">None of these campaigns are assigned to you</h2>
+          <p className="mt-1 text-sm text-zinc-600">
+            The workspace has {visible.length} campaign{visible.length === 1 ? "" : "s"}.
+          </p>
+          <Link href="/" className="mt-4 inline-block rounded-lg bg-ink px-4 py-2 text-sm font-medium text-white hover:bg-ink-soft">
+            Show everyone&apos;s
+          </Link>
+        </div>
+      ) : rows.length === 0 ? (
         <div className="mt-8 rounded-xl border border-dashed border-zinc-300 bg-surface p-12 text-center">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-zinc-100 text-zinc-400">
             <svg className="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
@@ -196,7 +240,7 @@ export default async function Dashboard() {
             <MiniStat label="Negative" value={totals.negative} accent={totals.negative > 0 ? "rose" : "zinc"} />
           </div>
 
-          <h2 className="mt-8 text-sm font-semibold text-zinc-500">All campaigns</h2>
+          <h2 className="mt-8 text-sm font-semibold text-zinc-500">{mineOnly ? "My campaigns" : "All campaigns"}</h2>
           <ul className="mt-3 flex flex-col gap-2">
             {rows.map((c) => {
               const del = deleteCampaign.bind(null, c.id);

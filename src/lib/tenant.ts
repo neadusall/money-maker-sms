@@ -25,11 +25,11 @@ import {
  *     portal on every SSO entry (/api/enter?ws=...), so it heals itself each
  *     time they open OS Text.
  *
- * A SECOND wall sits on top: per-recruiter visibility (see tenant-core). Inside
- * one tenant, a non-admin recruiter sees only the campaigns assigned to them;
- * an admin/owner still sees the whole tenant. The pure predicates live in
- * ./tenant-core (unit-tested, auth-free) and are re-exported here so existing
- * `@/lib/tenant` imports keep working unchanged.
+ * Inside one tenant the board is SHARED: every recruiter sees the workspace's
+ * campaigns, with an owner chip saying whose desk each one is and a "Mine"
+ * filter for focus. OSTEXT_PRIVATE_CAMPAIGNS=1 restores per-recruiter walls.
+ * The pure predicates live in ./tenant-core (unit-tested, auth-free) and are
+ * re-exported here so existing `@/lib/tenant` imports keep working unchanged.
  *
  * LEGACY ROWS ARE HOUSE: a NULL/blank tenant means the row predates isolation
  * and is treated as the operator's ("house"). That is fail-closed in the
@@ -45,6 +45,9 @@ export {
   campaignTenantIs,
   tenantCanSee,
   isAdminEmail,
+  privateCampaignsEnabled,
+  campaignOwnedBy,
+  viewerOwnsCampaign,
   campaignVisibleTo,
   viewerCanSeeCampaign,
   type Viewer,

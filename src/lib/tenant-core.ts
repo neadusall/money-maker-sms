@@ -31,13 +31,29 @@ export function tenantCanSee(tenant: string, rowTenant: string | null | undefine
 /**
  * Per-recruiter visibility on top of the tenant wall.
  *
- * The tenant wall keeps one customer's campaigns out of another's portal. This
- * second layer keeps one RECRUITER's campaigns out of a teammate's board inside
- * the SAME tenant: a regular recruiter sees only the campaigns assigned to them
- * (owner chip = their email), while a workspace ADMIN (owner) still sees the
- * whole tenant's portfolio. Admin is decided by email allowlist so it needs no
- * schema/role migration and no per-tenant config beyond one env line.
+ * The tenant wall keeps one customer's campaigns out of another's portal and is
+ * ABSOLUTE - never configurable, never crossed, not even by an admin.
+ *
+ * The second layer is about teammates inside ONE tenant, and it is now SHARED by
+ * default (2026-07-30): every recruiter in a workspace can see every campaign in
+ * that workspace, because a private-by-default board meant a recruiter opening OS
+ * Text found their teammates' desks simply missing - a delivered search looked
+ * lost. Ownership did not go away: the owner chip still says whose desk it is,
+ * and the boards carry a "Mine" filter for focusing on your own.
+ *
+ * Set OSTEXT_PRIVATE_CAMPAIGNS=1 to restore the old private-by-default board
+ * (each recruiter sees only campaigns assigned to them; admins see the tenant).
  */
+function truthyEnv(v: string | undefined): boolean {
+  const s = (v ?? "").trim().toLowerCase();
+  return s === "1" || s === "true" || s === "yes" || s === "on";
+}
+
+/** True when campaigns are walled per-recruiter inside a tenant (opt-in). */
+export function privateCampaignsEnabled(): boolean {
+  return truthyEnv(process.env.OSTEXT_PRIVATE_CAMPAIGNS);
+}
+
 function adminEmails(): Set<string> {
   const s = new Set<string>();
   // Operator floor: the house owner is ALWAYS an admin, so a missing/empty env
@@ -66,16 +82,13 @@ export interface Viewer {
 }
 
 /**
- * SQL predicate for list views: which campaigns this viewer may see. Admins get
- * the whole tenant; a recruiter gets ONLY campaigns whose owner is them. The
- * match is by recruiter EMAIL (the reliable, unique key); a name match is a
- * narrow fallback used ONLY for campaigns that carry no email at all (legacy /
- * free-text owner). A recruiter with no assigned campaigns sees an empty board,
- * never the team's - the visibility half of "no two recruiters touch one list".
+ * SQL predicate: this campaign is ASSIGNED to the viewer. The match is by
+ * recruiter EMAIL (the reliable, unique key); a name match is a narrow fallback
+ * used ONLY for campaigns that carry no email at all (legacy / free-text owner).
+ * This is the "Mine" filter on the boards, and - when OSTEXT_PRIVATE_CAMPAIGNS
+ * is on - also the wall.
  */
-export function campaignVisibleTo(v: Viewer): SQL {
-  const tenantPred = campaignTenantIs(v.tenant);
-  if (v.isAdmin) return tenantPred;
+export function campaignOwnedBy(v: Viewer): SQL {
   const clauses: SQL[] = [];
   if (v.email) {
     clauses.push(sql`lower(trim(coalesce(${campaigns.recruiterEmail}, ''))) = ${v.email}`);
@@ -84,8 +97,31 @@ export function campaignVisibleTo(v: Viewer): SQL {
     clauses.push(sql`(coalesce(nullif(trim(${campaigns.recruiterEmail}), ''), '') = ''
       AND lower(trim(coalesce(${campaigns.recruiterName}, ''))) = ${v.name})`);
   }
-  const own = clauses.length ? sql`(${sql.join(clauses, sql` OR `)})` : sql`false`;
-  return sql`(${tenantPred}) AND ${own}`;
+  return clauses.length ? sql`(${sql.join(clauses, sql` OR `)})` : sql`false`;
+}
+
+/** Row-level version of campaignOwnedBy for an already-loaded campaign. */
+export function viewerOwnsCampaign(
+  v: Viewer,
+  c: { recruiterEmail: string | null; recruiterName: string | null },
+): boolean {
+  const cEmail = (c.recruiterEmail ?? "").trim().toLowerCase();
+  if (cEmail) return !!v.email && cEmail === v.email;
+  const cName = (c.recruiterName ?? "").trim().toLowerCase();
+  return !!cName && !!v.name && cName === v.name;
+}
+
+/**
+ * SQL predicate for list views: which campaigns this viewer may see. The tenant
+ * is the wall. Inside it the board is shared, so a recruiter sees the whole
+ * workspace's campaigns (and can cover a teammate's desk) unless the operator
+ * opted into private boards with OSTEXT_PRIVATE_CAMPAIGNS - in which case a
+ * non-admin is narrowed to the campaigns assigned to them.
+ */
+export function campaignVisibleTo(v: Viewer): SQL {
+  const tenantPred = campaignTenantIs(v.tenant);
+  if (v.isAdmin || !privateCampaignsEnabled()) return tenantPred;
+  return sql`(${tenantPred}) AND ${campaignOwnedBy(v)}`;
 }
 
 /** Row-level version of campaignVisibleTo for an already-loaded campaign. */
@@ -94,9 +130,6 @@ export function viewerCanSeeCampaign(
   c: { tenant: string | null; recruiterEmail: string | null; recruiterName: string | null },
 ): boolean {
   if (normalizeTenant(c.tenant) !== v.tenant) return false;
-  if (v.isAdmin) return true;
-  const cEmail = (c.recruiterEmail ?? "").trim().toLowerCase();
-  if (cEmail) return !!v.email && cEmail === v.email;
-  const cName = (c.recruiterName ?? "").trim().toLowerCase();
-  return !!cName && !!v.name && cName === v.name;
+  if (v.isAdmin || !privateCampaignsEnabled()) return true;
+  return viewerOwnsCampaign(v, c);
 }
