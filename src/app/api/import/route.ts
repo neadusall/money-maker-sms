@@ -8,6 +8,7 @@ import { normalizePhone } from "@/lib/phone";
 import { latestPhoneVerdicts } from "@/lib/phone-accuracy";
 import { isQStashConfigured, enqueueValidationDrain, enqueueScoreDrain } from "@/lib/schedule";
 import { kickSoon } from "@/lib/internal-clock";
+import { canonicalizeTemplate } from "@/lib/merge";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -161,7 +162,10 @@ export async function POST(req: Request) {
         name,
         tenant,
         status: "draft",
-        smsTemplate: clean(body.campaign?.smsTemplate) ?? DEFAULT_TEMPLATE(name),
+        // Canonicalized on the way in: a template pushed from JD Sourcing gets
+        // the same merge-token normalization as one typed in the UI, so an
+        // upstream {FirstName} can't arrive in a shape the sender won't resolve.
+        smsTemplate: canonicalizeTemplate(clean(body.campaign?.smsTemplate) ?? DEFAULT_TEMPLATE(name)),
         positionSummary: clean(body.campaign?.positionSummary),
         recruiterName: clean(body.campaign?.recruiterName),
         recruiterEmail: clean(body.campaign?.recruiterEmail),

@@ -33,6 +33,7 @@ import { seedContacts } from "./seed-contacts";
 import { sendSms } from "./telnyx";
 import { telnyxCredsForTenant } from "./tenant-telnyx";
 import { processContactSend } from "./send";
+import { canonicalizeTemplate, auditTemplate, describeAudit } from "./merge";
 import { normalizePhone } from "./phone";
 import { isStopKeyword } from "./opt-out";
 import { recordOptOut } from "./opt-out-record";
@@ -259,6 +260,44 @@ async function optedOutPhones(phones: string[]): Promise<Set<string>> {
   return result;
 }
 
+/* --- Merge-token fail-safes ---------------------------------------------------
+ * A recruiter types the template by hand, so it is the one place a single typo
+ * can silently cost a whole campaign. Two guards, applied everywhere:
+ *   - canonicalizeTemplate on every WRITE, so what's stored is what the send
+ *     path reads ({FirstName} and {name} are saved as {first_name}).
+ *   - assertTemplateCanSend before anything GOES OUT, so a template that
+ *     resolves for nobody stops the recruiter with a sentence instead of
+ *     reporting "0 sent" an hour later. */
+
+/**
+ * Refuse to start sending a template that no contact can receive. Deliberately
+ * only blocks the total-failure case: partial gaps ("40 of 500 have no company")
+ * are the recruiter's call and still send to everyone who resolves.
+ */
+async function assertTemplateCanSend(campaign: Campaign): Promise<void> {
+  const audience = await db
+    .select()
+    .from(contacts)
+    .where(
+      and(
+        eq(contacts.campaignId, campaign.id),
+        eq(contacts.status, "pending"),
+        eq(contacts.optedOut, false),
+        isNull(contacts.deletedAt),
+        campaign.minScoreToSend
+          ? sql`${contacts.qualificationScore} >= ${campaign.minScoreToSend}`
+          : undefined,
+      ),
+    );
+  if (audience.length === 0) return; // nothing queued yet — not a template problem
+  const audit = auditTemplate(campaign.smsTemplate, audience);
+  if (!audit.blocksEveryone) return;
+  throw new Error(
+    describeAudit(audit) ??
+      "This message can't be sent to anyone on the list. Check the merge fields in the template.",
+  );
+}
+
 export async function createCampaign(formData: FormData) {
   const name = str(formData, "name");
   const smsTemplate = str(formData, "smsTemplate");
@@ -275,7 +314,7 @@ export async function createCampaign(formData: FormData) {
       // A campaign created in the UI belongs to its creator's tenant, so it
       // renders only inside that tenant's portal (shared-engine isolation).
       tenant: await sessionTenant(),
-      smsTemplate,
+      smsTemplate: canonicalizeTemplate(smsTemplate),
       llmMode: llmModeValue,
       positionSummary: str(formData, "positionSummary"),
       calendarLink: str(formData, "calendarLink"),
@@ -399,7 +438,10 @@ export async function updateCampaign(campaignId: string, formData: FormData) {
     .update(campaigns)
     .set({
       name: str(formData, "name") ?? undefined,
-      smsTemplate: str(formData, "smsTemplate") ?? undefined,
+      smsTemplate: (() => {
+        const t = str(formData, "smsTemplate");
+        return t ? canonicalizeTemplate(t) : undefined;
+      })(),
       llmMode: (str(formData, "llmMode") as LlmMode | null) ?? undefined,
       positionSummary: str(formData, "positionSummary"),
       calendarLink: str(formData, "calendarLink"),
@@ -421,7 +463,11 @@ export async function updateCampaign(campaignId: string, formData: FormData) {
 }
 
 export async function setCampaignStatus(campaignId: string, status: "active" | "paused" | "completed" | "draft") {
-  await assertTenantCampaign(campaignId);
+  const campaign = await assertTenantCampaign(campaignId);
+  // Going active is the moment a template stops being a draft and starts being
+  // texts. Check it here so the recruiter is told at the click, not by a silent
+  // "0 sent" later. Pausing/completing must never be blocked.
+  if (status === "active") await assertTemplateCanSend(campaign);
   await db.update(campaigns).set({ status, updatedAt: new Date() }).where(eq(campaigns.id, campaignId));
   // Activate/Resume must actually START the pipeline, not just recolor the badge:
   // kick the drain so validation, scoring, and sending proceed on their own.
@@ -449,7 +495,7 @@ export async function saveCampaignTemplate(campaignId: string, formData: FormDat
     name,
     tenant,
     llmMode: campaign.llmMode,
-    smsTemplate: campaign.smsTemplate,
+    smsTemplate: canonicalizeTemplate(campaign.smsTemplate),
     positionSummary: campaign.positionSummary,
     recruiterName: campaign.recruiterName,
     recruiterEmail: campaign.recruiterEmail,
@@ -487,7 +533,9 @@ export async function applyCampaignTemplate(campaignId: string, formData: FormDa
     .update(campaigns)
     .set({
       llmMode: t.llmMode,
-      smsTemplate: t.smsTemplate,
+      // Canonicalized on apply too: templates saved before the merge-token
+      // normalization existed can still carry a raw {FirstName}.
+      smsTemplate: canonicalizeTemplate(t.smsTemplate),
       sendWindowStart: t.sendWindowStart,
       sendWindowEnd: t.sendWindowEnd,
       ...(t.positionSummary ? { positionSummary: t.positionSummary, scoringRubric: null } : {}),
@@ -706,7 +754,11 @@ export async function sendCampaignBatch(campaignId: string): Promise<void> {
 }
 
 export async function startCampaignSend(campaignId: string): Promise<void> {
-  await assertTenantCampaign(campaignId);
+  const campaign = await assertTenantCampaign(campaignId);
+
+  // Template gate before the schedule is stamped: an explicit Send click must
+  // not arm a campaign whose message resolves for nobody.
+  await assertTemplateCanSend(campaign);
 
   // Score-first guard: don't text anyone while fit-scoring is still running, so
   // unqualified prospects are never messaged before they've been evaluated.

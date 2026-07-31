@@ -21,6 +21,7 @@ import { LiveBadge } from "@/components/LiveBadge";
 import { KpiCard, Funnel, SentimentMeter, MiniStat, pct } from "@/components/Stats";
 import { sentimentOf } from "@/lib/sentiment";
 import { campaignFunnels, EMPTY_FUNNEL } from "@/lib/campaign-stats";
+import { auditTemplate, describeAudit } from "@/lib/merge";
 
 export const dynamic = "force-dynamic";
 
@@ -76,6 +77,26 @@ export default async function CampaignDetail({
     else if (bucket === "negative") negative += r.n;
     else neutral += r.n;
   }
+
+  // MERGE-TOKEN PRE-FLIGHT: dry-run the template against the people Send would
+  // actually text, so a broken token is a sentence on the page BEFORE the click
+  // rather than a per-contact failure discovered after the campaign reads 0 sent.
+  // Bounded read — the banner only needs to know how many resolve, not who.
+  const sendable = await db
+    .select()
+    .from(contacts)
+    .where(
+      and(
+        eq(contacts.campaignId, id),
+        eq(contacts.status, "pending"),
+        eq(contacts.optedOut, false),
+        sql`${contacts.deletedAt} is null`,
+        sql`(${bar} = 0 or ${contacts.qualificationScore} >= ${bar})`,
+      ),
+    )
+    .limit(500);
+  const templateAudit = sendable.length ? auditTemplate(campaign.smsTemplate, sendable) : null;
+  const templateProblem = templateAudit ? describeAudit(templateAudit) : null;
 
   const send = startCampaignSend.bind(null, id);
   const update = updateCampaign.bind(null, id);
@@ -312,6 +333,23 @@ export default async function CampaignDetail({
             </strong>{" "}
             Sending begins automatically then (within the send window), once fit scoring is complete. Clear the schedule
             field below and save to cancel, or use the Send button to start now.
+          </span>
+        </div>
+      ) : null}
+
+      {templateProblem ? (
+        <div className="flex items-start gap-2 rounded-xl border border-rose-300 bg-rose-50 p-4 text-sm text-rose-900">
+          <svg className="mt-0.5 h-4 w-4 shrink-0 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+          </svg>
+          <span>
+            <strong>
+              {templateAudit?.blocksEveryone
+                ? "This message can't go out as written."
+                : "Some contacts can't receive this message."}
+            </strong>{" "}
+            {templateProblem}
+            {templateAudit?.blocksEveryone ? " Sending stays blocked until it's fixed." : ""}
           </span>
         </div>
       ) : null}

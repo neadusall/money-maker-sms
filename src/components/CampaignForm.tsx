@@ -1,6 +1,7 @@
 import type { Campaign } from "@/db/schema";
 import { REGIONS } from "@/lib/region";
 import { OPT_OUT_LINE } from "@/lib/opt-out";
+import { FIELD_CATALOG } from "@/lib/merge";
 import { SaveButton } from "@/components/SaveButton";
 
 type Action = (formData: FormData) => Promise<void>;
@@ -75,8 +76,30 @@ export function CampaignForm({
           required
           rows={3}
           defaultValue={campaign?.smsTemplate ?? SAMPLE_TEMPLATE}
-          help="Merge tokens pull from each contact's CSV data: {first_name}, {company}, {job_title}, {location}, or any custom column. Only use a token if every contact has that field, otherwise that contact's send is skipped. For the role you're recruiting for, type it directly (it's the same for everyone), don't use {job_title} (that's the candidate's current title)."
+          help="For the role you're recruiting for, type it directly (it's the same for everyone), don't use {job_title} (that's the candidate's current title)."
         />
+        <div className="-mt-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+          <span className="text-xs font-medium text-zinc-700">Merge fields you can use</span>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {FIELD_CATALOG.map((f) => (
+              <span
+                key={f.key}
+                title={`${f.label}, e.g. ${f.example}`}
+                className="inline-flex items-center gap-1 rounded border border-zinc-300 bg-surface px-1.5 py-0.5 text-[11px] text-zinc-700"
+              >
+                <code className="font-mono text-zinc-900">{`{${f.key}}`}</code>
+                <span className="text-zinc-500">{f.label}</span>
+              </span>
+            ))}
+          </div>
+          <p className="mt-2 text-xs text-zinc-500">
+            Capitals and underscores don&apos;t matter: <code className="font-mono">{"{FirstName}"}</code>,{" "}
+            <code className="font-mono">{"{first_name}"}</code> and <code className="font-mono">{"{name}"}</code> all
+            fill in the first name, and they&apos;re saved in the standard form for you. Any extra column on your
+            contacts works as a token too. If a message ends up unsendable for everyone on the list, the campaign
+            won&apos;t start and you&apos;ll be told which field is the problem.
+          </p>
+        </div>
         <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
           <span className="text-xs font-medium text-zinc-700">Every text automatically ends with:</span>
           <div className="mt-1.5 flex items-start gap-2">
