@@ -47,6 +47,20 @@ describe("renderTemplate", () => {
   it("accepts both {x} and {{x}} forms", () => {
     expect(renderTemplate("{first_name} {{company}}", contact())).toBe("Alex Acme");
   });
+
+  // 2026-07-31 regression: {FirstName} resolved to nothing because lowercasing
+  // gave "firstname" and the field map is keyed "first_name".
+  it("ignores underscores as well as case in standard tokens", () => {
+    expect(renderTemplate("{FirstName}", contact())).toBe("Alex");
+    expect(renderTemplate("{firstname}", contact())).toBe("Alex");
+    expect(renderTemplate("{lastName} {JobTitle}", contact())).toBe("Doe Engineer");
+    expect(renderTemplate("{CompanyName}", contact())).toBe("Acme");
+  });
+
+  it("matches custom fields on the same loose key", () => {
+    const c = contact({ customFields: { phone_source: "koldinfo" } as Contact["customFields"] });
+    expect(renderTemplate("{PhoneSource}", c)).toBe("koldinfo");
+  });
 });
 
 describe("findUnmergedTokens", () => {
@@ -58,6 +72,20 @@ describe("findUnmergedTokens", () => {
 
   it("returns empty when all tokens resolve", () => {
     expect(findUnmergedTokens("{first_name}", contact())).toEqual([]);
+  });
+
+  // The send path fails a contact on any unmerged token, so this shape decided
+  // whether a whole campaign went out or died at 0 sent.
+  it("does not flag CamelCase standard tokens that have a value", () => {
+    expect(findUnmergedTokens("Hi {FirstName}, this is Noah", contact())).toEqual([]);
+  });
+
+  it("still flags a CamelCase token whose value is genuinely missing", () => {
+    expect(findUnmergedTokens("{FirstName}", contact({ firstName: null }))).toEqual(["FirstName"]);
+  });
+
+  it("treats an empty-string field as missing, not as a merged blank", () => {
+    expect(findUnmergedTokens("{first_name}", contact({ firstName: "" }))).toEqual(["first_name"]);
   });
 });
 
