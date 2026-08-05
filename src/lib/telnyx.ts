@@ -87,9 +87,12 @@ export type LineType = "mobile" | "landline" | "voip" | "toll_free" | "unknown";
  * asked at all (network failure, rate limit, auth, 5xx): that is an outage,
  * not a fact about the number, so callers must hold the contact for a retry
  * rather than treat it as "not a cell".
+ *
+ * A tenant that brings its own Telnyx account passes that account's apiKey so
+ * its lookups bill (and succeed/fail with) ITS balance, same as its sends.
  */
-export async function lookupLineType(phone: string): Promise<LineType> {
-  const key = process.env.TELNYX_API_KEY;
+export async function lookupLineType(phone: string, apiKey?: string): Promise<LineType> {
+  const key = apiKey?.trim() || process.env.TELNYX_API_KEY;
   if (!key) throw new Error("TELNYX_API_KEY is not set");
   let lastFailure = "";
   // One retry so a transient blip doesn't get a real mobile number dropped.

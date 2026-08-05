@@ -45,10 +45,20 @@ export interface ValidateBatchResult {
 /** One Telnyx line-type validation batch: promote confirmed mobiles
  *  validating -> pending, delete everything else. Fail-closed on a missing key. */
 export async function runValidateBatch(campaignId: string): Promise<ValidateBatchResult> {
+  // A tenant on its own Telnyx account validates through THAT account, exactly
+  // like its sends: lookups bill the tenant's balance, and the house account's
+  // state (e.g. out of credit) can't stall a funded tenant's campaigns.
+  const [campaign] = await db
+    .select({ tenant: campaigns.tenant })
+    .from(campaigns)
+    .where(eq(campaigns.id, campaignId))
+    .limit(1);
+  const tenantKey = telnyxCredsForTenant(campaign?.tenant)?.apiKey;
+
   // SAFEGUARD: with no Telnyx key every lookup would come back "unknown" and the
   // strict keep-mobiles-only rule below would delete the ENTIRE batch. Refuse to
   // run instead: contacts stay "validating" (never textable) until the key is set.
-  if (!process.env.TELNYX_API_KEY) {
+  if (!tenantKey && !process.env.TELNYX_API_KEY) {
     const [{ remaining }] = await db
       .select({ remaining: sql<number>`count(*)::int` })
       .from(contacts)
@@ -99,7 +109,7 @@ export async function runValidateBatch(campaignId: string): Promise<ValidateBatc
     }
     let lineType: string;
     try {
-      lineType = await lookupLineType(contact.phone);
+      lineType = await lookupLineType(contact.phone, tenantKey);
     } catch {
       // Telnyx could not be asked (outage, rate limit, auth): NOT a verdict.
       // Leave the contact "validating" (never textable) for the next tick to
