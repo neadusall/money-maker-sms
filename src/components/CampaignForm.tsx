@@ -1,6 +1,8 @@
 import type { Campaign } from "@/db/schema";
 import { REGIONS } from "@/lib/region";
 import { OPT_OUT_LINE } from "@/lib/opt-out";
+import { FIELD_CATALOG } from "@/lib/merge";
+import { SaveButton } from "@/components/SaveButton";
 
 type Action = (formData: FormData) => Promise<void>;
 
@@ -74,8 +76,30 @@ export function CampaignForm({
           required
           rows={3}
           defaultValue={campaign?.smsTemplate ?? SAMPLE_TEMPLATE}
-          help="Merge tokens pull from each contact's CSV data: {first_name}, {company}, {job_title}, {location}, or any custom column. Only use a token if every contact has that field — otherwise that contact's send is skipped. For the role you're recruiting for, type it directly (it's the same for everyone), don't use {job_title} (that's the candidate's current title)."
+          help="For the role you're recruiting for, type it directly (it's the same for everyone), don't use {job_title} (that's the candidate's current title)."
         />
+        <div className="-mt-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+          <span className="text-xs font-medium text-zinc-700">Merge fields you can use</span>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {FIELD_CATALOG.map((f) => (
+              <span
+                key={f.key}
+                title={`${f.label}, e.g. ${f.example}`}
+                className="inline-flex items-center gap-1 rounded border border-zinc-300 bg-surface px-1.5 py-0.5 text-[11px] text-zinc-700"
+              >
+                <code className="font-mono text-zinc-900">{`{${f.key}}`}</code>
+                <span className="text-zinc-500">{f.label}</span>
+              </span>
+            ))}
+          </div>
+          <p className="mt-2 text-xs text-zinc-500">
+            Capitals and underscores don&apos;t matter: <code className="font-mono">{"{FirstName}"}</code>,{" "}
+            <code className="font-mono">{"{first_name}"}</code> and <code className="font-mono">{"{name}"}</code> all
+            fill in the first name, and they&apos;re saved in the standard form for you. Any extra column on your
+            contacts works as a token too. If a message ends up unsendable for everyone on the list, the campaign
+            won&apos;t start and you&apos;ll be told which field is the problem.
+          </p>
+        </div>
         <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
           <span className="text-xs font-medium text-zinc-700">Every text automatically ends with:</span>
           <div className="mt-1.5 flex items-start gap-2">
@@ -85,7 +109,7 @@ export function CampaignForm({
             <span className="text-sm italic text-zinc-600">{OPT_OUT_LINE}</span>
           </div>
           <p className="mt-1.5 text-xs text-zinc-500">
-            Required for compliance — appended to the end of every outbound message (you don&apos;t type it). It won&apos;t
+            Required for compliance: appended to the end of every outbound message (you don&apos;t type it). It won&apos;t
             be added twice if your template already includes it.
           </p>
         </div>
@@ -115,11 +139,11 @@ export function CampaignForm({
           reopens.
         </p>
         <Field
-          label="Schedule send (optional)"
+          label="Send date & time (required before anything sends)"
           name="scheduledAt"
           type="datetime-local"
           defaultValue={campaign?.scheduledAt ? toLocalInput(campaign.scheduledAt) : ""}
-          help={`Pick a date and time (${APP_TZ}) to start this campaign automatically. Leave blank to start it yourself with the Launch button. Sending still respects the send window above.`}
+          help={`Texting starts only at this date and time (${APP_TZ}), inside the send window above. Without it the campaign never sends, no matter how it was created. Contacts added after this time are held until you set a new one (or click Send). Clear it and save to stop upcoming sends.`}
         />
         <Field
           label="LinkedIn Sales Navigator search link (optional)"
@@ -140,7 +164,7 @@ export function CampaignForm({
       </Card>
 
       {showContactUpload ? (
-        <Card title="Contacts (optional — you can also add them later)">
+        <Card title="Contacts (optional: you can also add them later)">
           <div className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 p-4">
             <label className="block">
               <span className="block text-xs font-medium text-zinc-700">Upload a CSV of contacts</span>
@@ -148,7 +172,7 @@ export function CampaignForm({
                 type="file"
                 name="csv"
                 accept=".csv,text/csv"
-                className="mt-2 block w-full text-sm text-zinc-600 file:mr-3 file:rounded-md file:border-0 file:bg-zinc-900 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-zinc-800"
+                className="mt-2 block w-full text-sm text-zinc-600 file:mr-3 file:rounded-md file:border-0 file:bg-ink file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-ink-soft"
               />
             </label>
             <label className="mt-3 flex items-start gap-2 text-xs text-zinc-700">
@@ -176,7 +200,7 @@ export function CampaignForm({
               </span>
             </label>
             <p className="mt-2 text-xs text-zinc-500">
-              The whole list uploads — you pick who to text afterward by fit score.{" "}
+              The whole list uploads. You pick who to text afterward by fit score.{" "}
             </p>
             <p className="mt-2 text-xs text-zinc-500">
               Recognized columns: first name, last name, company, job title, <strong>phone (required)</strong>, email,
@@ -187,13 +211,13 @@ export function CampaignForm({
         </Card>
       ) : null}
 
-      <Card title="Position summary — what the AI uses to reply">
+      <Card title="Position summary: what the AI uses to reply">
         <TextArea
           label="Position summary / job description"
           name="positionSummary"
           rows={12}
           defaultValue={campaign?.positionSummary ?? ""}
-          help="Paste the full job description here. This is the only context the AI needs — it reads this to classify candidate replies and to draft responses, pulling out compensation, location, remote status, skills, company info, and selling points as needed."
+          help="Paste the full job description here. This is the only context the AI needs: it reads this to classify candidate replies and to draft responses, pulling out compensation, location, remote status, skills, company info, and selling points as needed."
         />
       </Card>
 
@@ -211,12 +235,7 @@ export function CampaignForm({
       </Card>
 
       <div className="flex items-center justify-end gap-3">
-        <button
-          type="submit"
-          className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800"
-        >
-          {submitLabel ?? "Save campaign"}
-        </button>
+        <SaveButton label={submitLabel ?? "Save campaign"} />
       </div>
     </form>
   );
@@ -224,7 +243,7 @@ export function CampaignForm({
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-lg border border-zinc-200 bg-white p-5">
+    <section className="rounded-lg border border-zinc-200 bg-surface p-5">
       <h2 className="text-sm font-semibold text-zinc-900">{title}</h2>
       <div className="mt-4 grid gap-4">{children}</div>
     </section>
@@ -321,7 +340,7 @@ function Select({
       <select
         name={name}
         defaultValue={defaultValue}
-        className="mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500"
+        className="mt-1 w-full rounded-md border border-zinc-300 bg-surface px-3 py-2 text-sm shadow-sm focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500"
       >
         {options.map((o) => (
           <option key={o.value} value={o.value}>

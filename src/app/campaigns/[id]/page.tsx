@@ -1,10 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
-import { campaigns, contacts, conversations } from "@/db/schema";
+import { campaignTemplates, contacts, conversations, type CampaignTemplate } from "@/db/schema";
+import { sessionTenant, tenantCampaign } from "@/lib/tenant";
 import {
+  applyCampaignTemplate,
   deleteCampaign,
+  deleteCampaignTemplate,
+  saveCampaignTemplate,
   startCampaignSend,
   setCampaignStatus,
   updateCampaign,
@@ -16,6 +20,8 @@ import { AutoRefresh } from "@/components/AutoRefresh";
 import { LiveBadge } from "@/components/LiveBadge";
 import { KpiCard, Funnel, SentimentMeter, MiniStat, pct } from "@/components/Stats";
 import { sentimentOf } from "@/lib/sentiment";
+import { campaignFunnels, EMPTY_FUNNEL } from "@/lib/campaign-stats";
+import { auditTemplate, describeAudit } from "@/lib/merge";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +32,8 @@ export default async function CampaignDetail({
 }) {
   const { id } = await params;
 
-  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, id));
+  // Tenant-checked load: a campaign outside the signed-in user's tenant 404s.
+  const campaign = await tenantCampaign(id);
   if (!campaign) notFound();
 
   const bar = campaign.minScoreToSend ?? 0;
@@ -37,9 +44,6 @@ export default async function CampaignDetail({
       // Pending contacts that actually meet the fit bar — i.e. who "Send" will text.
       qualifying: sql<number>`count(*) filter (where ${contacts.status} = 'pending' and ${contacts.optedOut} = false and (${bar} = 0 or ${contacts.qualificationScore} >= ${bar}))::int`,
       validating: sql<number>`count(*) filter (where ${contacts.status} = 'validating')::int`,
-      sent: sql<number>`count(*) filter (where ${contacts.status} in ('sent','delivered','replied'))::int`,
-      delivered: sql<number>`count(*) filter (where ${contacts.status} in ('delivered','replied'))::int`,
-      replied: sql<number>`count(*) filter (where ${contacts.status} = 'replied')::int`,
       optedOut: sql<number>`count(*) filter (where ${contacts.status} = 'opted_out')::int`,
       failed: sql<number>`count(*) filter (where ${contacts.status} = 'failed')::int`,
       emailsSent: sql<number>`count(*) filter (where ${contacts.positionEmailSentAt} is not null)::int`,
@@ -48,15 +52,11 @@ export default async function CampaignDetail({
     .from(contacts)
     .where(eq(contacts.campaignId, id));
 
-  // Raw SQL with a table alias — Drizzle won't correlate ${conversations.id}
-  // inside a filtered EXISTS subquery (it silently returns 0).
-  const convoRows = await db.execute(sql`
-    SELECT
-      count(*) filter (where cv.status = 'needs_attention')::int needs_attention,
-      count(*) filter (where exists (select 1 from messages m where m.conversation_id = cv.id and m.direction = 'inbound'))::int replied
-    FROM conversations cv WHERE cv.campaign_id = ${id}`);
-  const convoRow = (convoRows.rows[0] ?? {}) as { needs_attention?: number; replied?: number };
-  const convoStats = { needsAttention: Number(convoRow.needs_attention ?? 0), replied: Number(convoRow.replied ?? 0) };
+  // Sent/delivered/replied come from the messages table (see campaign-stats):
+  // contact.status churn and unearned inbounds made the contact-status
+  // versions of these numbers lie.
+  const funnel = (await campaignFunnels(id)).get(id) ?? EMPTY_FUNNEL;
+  const convoStats = { needsAttention: funnel.needsAttention, replied: funnel.replied };
 
   // Reply-sentiment breakdown from the AI classifications on replied threads.
   const classRows = await db
@@ -78,19 +78,58 @@ export default async function CampaignDetail({
     else neutral += r.n;
   }
 
+  // MERGE-TOKEN PRE-FLIGHT: dry-run the template against the people Send would
+  // actually text, so a broken token is a sentence on the page BEFORE the click
+  // rather than a per-contact failure discovered after the campaign reads 0 sent.
+  // Bounded read — the banner only needs to know how many resolve, not who.
+  const sendable = await db
+    .select()
+    .from(contacts)
+    .where(
+      and(
+        eq(contacts.campaignId, id),
+        eq(contacts.status, "pending"),
+        eq(contacts.optedOut, false),
+        sql`${contacts.deletedAt} is null`,
+        sql`(${bar} = 0 or ${contacts.qualificationScore} >= ${bar})`,
+      ),
+    )
+    .limit(500);
+  const templateAudit = sendable.length ? auditTemplate(campaign.smsTemplate, sendable) : null;
+  const templateProblem = templateAudit ? describeAudit(templateAudit) : null;
+
   const send = startCampaignSend.bind(null, id);
   const update = updateCampaign.bind(null, id);
   const pause = setCampaignStatus.bind(null, id, "paused");
   const resume = setCampaignStatus.bind(null, id, "active");
   const del = deleteCampaign.bind(null, id);
+  const applyTpl = applyCampaignTemplate.bind(null, id);
+  const saveTpl = saveCampaignTemplate.bind(null, id);
+  const deleteTpl = deleteCampaignTemplate.bind(null, id);
+
+  // Saved campaign setups for the quick-setup dropdown. Tolerant of a missing
+  // table (mid-rollout): the page must never 500 over an optional convenience.
+  let templates: CampaignTemplate[] = [];
+  try {
+    // Only this tenant's saved templates: template names/contents are tenant
+    // data too (legacy NULL rows belong to house).
+    const tenant = await sessionTenant();
+    templates = await db
+      .select()
+      .from(campaignTemplates)
+      .where(sql`coalesce(nullif(trim(${campaignTemplates.tenant}), ''), 'house') = ${tenant}`)
+      .orderBy(asc(campaignTemplates.name));
+  } catch {
+    templates = [];
+  }
 
   const pending = stats?.pending ?? 0;
   const qualifying = stats?.qualifying ?? 0;
   const unscored = stats?.unscored ?? 0;
   const total = stats?.total ?? 0;
-  const sent = stats?.sent ?? 0;
-  const delivered = stats?.delivered ?? 0;
-  const replied = convoStats?.replied ?? 0;
+  const sent = funnel.messaged;
+  const delivered = funnel.delivered;
+  const replied = funnel.replied;
   const classified = positive + neutral + negative;
   const deliveryRate = pct(delivered, sent);
   const replyRate = pct(replied, delivered);
@@ -99,6 +138,28 @@ export default async function CampaignDetail({
   const appTz = process.env.APP_TIMEZONE ?? "America/New_York";
   const scheduledFuture =
     campaign.scheduledAt && campaign.scheduledAt.getTime() > Date.now() ? campaign.scheduledAt : null;
+
+  // Fail-safe visibility: without a human-set send date & time nothing sends.
+  // On an ACTIVE campaign the fired schedule is standing approval, so late
+  // arrivals (enrichment top-ups, Boost phones) flow through automatically and
+  // are just normal pending sends; only a paused/draft campaign holds them.
+  const unscheduled = !campaign.scheduledAt;
+  let heldNew = 0;
+  if (campaign.scheduledAt && !scheduledFuture && campaign.status !== "active") {
+    const [row] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(contacts)
+      .where(
+        and(
+          eq(contacts.campaignId, id),
+          sql`${contacts.status} = 'pending'`,
+          eq(contacts.optedOut, false),
+          sql`${contacts.deletedAt} is null`,
+          sql`${contacts.createdAt} > ${campaign.scheduledAt}`,
+        ),
+      );
+    heldNew = row?.n ?? 0;
+  }
 
   return (
     <section className="grid gap-6">
@@ -111,8 +172,11 @@ export default async function CampaignDetail({
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-semibold tracking-tight">{campaign.name}</h1>
             <StatusBadge status={campaign.status} />
-            <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600">
-              {campaign.llmMode.replace(/_/g, " ")}
+            <span
+              title="How the AI handles replies (campaign status is the badge to the left)"
+              className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600"
+            >
+              AI replies: {campaign.llmMode.replace(/_/g, " ")}
             </span>
             {campaign.salesNavUrl ? (
               <a
@@ -136,7 +200,7 @@ export default async function CampaignDetail({
       <div className="flex flex-wrap items-center gap-2">
         <Link
           href={`/campaigns/${id}/contacts`}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-zinc-50"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 bg-surface px-3 py-1.5 text-sm font-medium hover:bg-zinc-50"
         >
           <svg className="h-4 w-4 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
             <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />
@@ -145,7 +209,7 @@ export default async function CampaignDetail({
         </Link>
         <Link
           href={`/campaigns/${id}/inbox`}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-zinc-50"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 bg-surface px-3 py-1.5 text-sm font-medium hover:bg-zinc-50"
         >
           <svg className="h-4 w-4 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
             <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.76c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 0 1 .778-.332 48.294 48.294 0 0 0 5.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0 0 12 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018Z" />
@@ -160,7 +224,7 @@ export default async function CampaignDetail({
         <Link
           href={`/campaigns/${id}/archived`}
           title="Restorable threads from candidates who replied (search by name or phone)"
-          className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-zinc-50"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 bg-surface px-3 py-1.5 text-sm font-medium hover:bg-zinc-50"
         >
           <svg className="h-4 w-4 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
             <path strokeLinecap="round" strokeLinejoin="round" d="m20.25 7.5-.625 10.632a2.25 2.25 0 0 1-2.247 2.118H6.622a2.25 2.25 0 0 1-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125Z" />
@@ -176,7 +240,14 @@ export default async function CampaignDetail({
           </form>
         ) : (
           <form action={resume}>
-            <button className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-100">
+            <button
+              title={
+                campaign.status === "draft"
+                  ? "Prepares this campaign: numbers get cell-checked and fit-scored. Nothing is texted until you set a send date & time below (or click Send)."
+                  : "Reactivates the campaign. Texting still requires a send date & time set below."
+              }
+              className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
+            >
               {campaign.status === "draft" ? "Activate" : "Resume"}
             </button>
           </form>
@@ -185,10 +256,10 @@ export default async function CampaignDetail({
         <form action={send}>
           <button
             disabled={qualifying === 0 || unscored > 0}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-sky-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-zinc-300"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-sky-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-[#0369a1] disabled:cursor-not-allowed disabled:bg-zinc-300"
             title={
               unscored > 0
-                ? `Scoring ${unscored} contacts — sending is paused until fit scores are ready`
+                ? `Scoring ${unscored} contacts: sending is paused until fit scores are ready`
                 : qualifying === 0
                   ? bar > 0
                     ? `No unsent contacts score ≥ ${bar}. Lower the fit bar on the Contacts page to reach more people.`
@@ -211,6 +282,36 @@ export default async function CampaignDetail({
           <DeleteCampaignButton deleteAction={del} />
         </div>
       </div>
+
+      {unscheduled && qualifying + unscored + (stats?.validating ?? 0) > 0 ? (
+        <div className="flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          <svg className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+          </svg>
+          <span>
+            <strong>No send date &amp; time set: nothing will be texted.</strong>{" "}
+            This campaign never sends on its own.
+            Set a send date &amp; time in the settings below and save to schedule it, or click Send to text the ready
+            contacts now. Cell-checking and fit scoring run in the meantime so the list is ready when you are.
+          </span>
+        </div>
+      ) : null}
+
+      {heldNew > 0 ? (
+        <div className="flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          <svg className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+          </svg>
+          <span>
+            <strong>
+              {heldNew} contact{heldNew === 1 ? " was" : "s were"} added after the last scheduled send and {heldNew === 1 ? "is" : "are"} waiting.
+            </strong>{" "}
+            This campaign is not active, so nothing is texting. Press{" "}
+            {campaign.status === "draft" ? "Activate" : "Resume"}{" "}
+            and they send automatically with this campaign&apos;s current template and settings.
+          </span>
+        </div>
+      ) : null}
 
       {scheduledFuture ? (
         <div className="flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-900">
@@ -236,13 +337,42 @@ export default async function CampaignDetail({
         </div>
       ) : null}
 
-      {unscored > 0 && campaign.scoringError === "credit" ? (
+      {templateProblem ? (
         <div className="flex items-start gap-2 rounded-xl border border-rose-300 bg-rose-50 p-4 text-sm text-rose-900">
           <svg className="mt-0.5 h-4 w-4 shrink-0 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
           </svg>
           <span>
-            <strong>Scoring paused — Anthropic credit needs topping up.</strong> {unscored} candidate
+            <strong>
+              {templateAudit?.blocksEveryone
+                ? "This message can't go out as written."
+                : "Some contacts can't receive this message."}
+            </strong>{" "}
+            {templateProblem}
+            {templateAudit?.blocksEveryone ? " Sending stays blocked until it's fixed." : ""}
+          </span>
+        </div>
+      ) : null}
+
+      {unscored > 0 && campaign.scoringError === "no_key" ? (
+        <div className="flex items-start gap-2 rounded-xl border border-rose-300 bg-rose-50 p-4 text-sm text-rose-900">
+          <svg className="mt-0.5 h-4 w-4 shrink-0 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+          </svg>
+          <span>
+            <strong>Scoring paused: the AI key is not set up on this OS Text engine.</strong> {unscored} candidate
+            {unscored === 1 ? "" : "s"} can&apos;t be fit-scored, and reply sorting (positive / negative) is off too.
+            Ask your administrator to add the Anthropic API key to the engine; scoring resumes automatically once it&apos;s
+            in place.
+          </span>
+        </div>
+      ) : unscored > 0 && campaign.scoringError === "credit" ? (
+        <div className="flex items-start gap-2 rounded-xl border border-rose-300 bg-rose-50 p-4 text-sm text-rose-900">
+          <svg className="mt-0.5 h-4 w-4 shrink-0 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+          </svg>
+          <span>
+            <strong>Scoring paused: Anthropic credit needs topping up.</strong> {unscored} candidate
             {unscored === 1 ? "" : "s"} can&apos;t be scored because the Anthropic API balance is too low. Add credit at{" "}
             <a href="https://console.anthropic.com/settings/billing" target="_blank" rel="noopener noreferrer" className="font-semibold underline">
               console.anthropic.com → Billing
@@ -259,16 +389,16 @@ export default async function CampaignDetail({
           <span>
             <strong>Scoring {unscored} candidate{unscored === 1 ? "" : "s"} for fit…</strong> Sending is paused until
             everyone has a fit score, so you never text a prospect before they&apos;ve been evaluated. Updates
-            automatically — then set your fit bar on the Contacts page and send only to qualified candidates.
+            automatically, then set your fit bar on the Contacts page and send only to qualified candidates.
           </span>
         </div>
       ) : null}
 
-      {qualifying > 0 && unscored === 0 && (stats?.sent ?? 0) > 0 ? (
+      {qualifying > 0 && unscored === 0 && sent > 0 ? (
         <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
           <strong>You&apos;re adding to a campaign that already ran.</strong> Send texts only the {qualifying} unsent
           contact{qualifying === 1 ? "" : "s"}
-          {bar > 0 ? ` scoring ≥ ${bar}` : ""} — the {stats?.sent} you&apos;ve already messaged are skipped, so nobody
+          {bar > 0 ? ` scoring ≥ ${bar}` : ""}: the {sent}{" "}you&apos;ve already messaged are skipped, so nobody
           is texted twice.
         </div>
       ) : null}
@@ -286,6 +416,59 @@ export default async function CampaignDetail({
           <code>00:00</code>–<code>24:00</code> for all day) and save to send immediately.
         </div>
       ) : null}
+
+      <section className="rounded-xl border border-zinc-200 bg-surface p-4">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+          <span className="text-sm font-semibold text-zinc-900">Quick setup</span>
+          {templates.length > 0 ? (
+            <form action={applyTpl} className="flex flex-wrap items-center gap-2">
+              <select
+                name="templateId"
+                required
+                className="rounded-md border border-zinc-300 bg-surface px-3 py-1.5 text-sm shadow-sm focus:border-zinc-500 focus:outline-none"
+              >
+                {templates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+              <button className="rounded-md bg-ink px-3 py-1.5 text-sm font-medium text-white hover:bg-ink-soft">
+                Apply template
+              </button>
+              <button
+                formAction={deleteTpl}
+                title="Deletes the selected template (saved campaigns are not affected)"
+                className="rounded-md px-2 py-1.5 text-xs text-zinc-400 hover:text-rose-600"
+              >
+                Delete
+              </button>
+            </form>
+          ) : (
+            <span className="text-xs text-zinc-500">
+              No saved templates yet. Save this campaign&apos;s setup on the right and it appears here on every
+              campaign.
+            </span>
+          )}
+          <form action={saveTpl} className="ml-auto flex flex-wrap items-center gap-2">
+            <input
+              name="templateName"
+              required
+              defaultValue={campaign.name}
+              placeholder="Template name"
+              className="w-56 rounded-md border border-zinc-300 px-3 py-1.5 text-sm shadow-sm focus:border-zinc-500 focus:outline-none"
+            />
+            <button className="rounded-md border border-zinc-300 bg-surface px-3 py-1.5 text-sm font-medium hover:bg-zinc-50">
+              Save as template
+            </button>
+          </form>
+        </div>
+        <p className="mt-2 text-xs text-zinc-500">
+          Applying a template fills the message, job description, AI reply mode, send window, fit bar, and recruiter
+          details from a setup you saved. It never touches the send date &amp; time: nothing sends until you set that.
+          Saving with an existing template&apos;s name updates that template.
+        </p>
+      </section>
 
       {pending === 0 && (stats?.total ?? 0) === 0 ? (
         <div className="rounded-xl border border-dashed border-sky-300 bg-sky-50 p-4 text-sm text-sky-900">
@@ -319,7 +502,7 @@ export default async function CampaignDetail({
           label="Positive replies"
           value={positive}
           accent="emerald"
-          chip={classified ? `${positiveRate}% of replies` : "—"}
+          chip={classified ? `${positiveRate}% of replies` : "-"}
           hint="interested leads"
           icon={<IconSpark />}
         />

@@ -1,40 +1,47 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
 import { getHealthReport } from "@/lib/health";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 /**
- * GET /api/health — machine-readable system status for OS Text.
+ * GET /api/health — two callers, two contracts, deliberately kept apart.
  *
- * Checks the Telnyx API (connection + inbound webhook config) and this app's
- * send/receive activity, then returns a JSON report. Point an uptime monitor
- * (UptimeRobot, BetterStack, a cron, etc.) at it to get alerted the moment
- * sending or receiving breaks:
+ * WITHOUT a token: the liveness + right-build probe the ops layers key off —
+ * the container healthcheck, the deploy-tick fail-safe, and the standalone
+ * watchdog. A 200 from <host>/ostext-app/api/health proves the running build
+ * carries the /ostext-app basePath AND the proxy lets the probe through, which
+ * is exactly what the 2026-07-27 outage lacked (a stale no-basePath build
+ * redirect-looped every request while looking "up"). It does NO DB or vendor
+ * calls, so a Telnyx blip can never flap the container — and it must keep
+ * answering a flat 200, because autoheal restarts on anything else and a
+ * restart cannot fix a vendor outage, it can only flap it.
  *
- *   HTTP 200  -> status "ok" or "degraded"
- *   HTTP 503  -> status "down" (receiving is broken right now)
+ * WITH ?token=HEALTH_TOKEN: the deep report for an external uptime monitor —
+ * Telnyx connection, inbound webhook config, and this app's real send/receive
+ * activity, so "sending works but nothing arrives" gets caught.
  *
- * Access: a signed-in session, OR ?token=HEALTH_TOKEN for external monitors.
- * If HEALTH_TOKEN is unset, only a signed-in session can read it.
+ *   200 -> "ok" or "degraded"      503 -> "down" (receiving is broken now)
+ *
+ * The 503 is why the two are split rather than merged: it is the right answer
+ * for a monitor and the wrong one for a healthcheck. /api/health is in
+ * proxy.ts's PUBLIC_PATHS on the promise that it returns a static ok and
+ * nothing sensitive, so the report stays behind the token — never a bare GET.
+ *
+ * The Status page does not come through here at all: it is a server component
+ * and calls getHealthReport() directly.
  */
 export async function GET(req: Request) {
   const token = new URL(req.url).searchParams.get("token");
-  const expected = process.env.HEALTH_TOKEN;
-
-  let authorized = false;
-  if (expected && token && token === expected) {
-    authorized = true;
-  } else {
-    const session = await auth();
-    authorized = !!session?.user;
+  if (!token) {
+    return NextResponse.json({ ok: true, service: "ostext-engine" });
   }
-  if (!authorized) {
+
+  const expected = process.env.HEALTH_TOKEN;
+  if (!expected || token !== expected) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
   const report = await getHealthReport();
-  const httpStatus = report.status === "down" ? 503 : 200;
-  return NextResponse.json(report, { status: httpStatus });
+  return NextResponse.json(report, { status: report.status === "down" ? 503 : 200 });
 }

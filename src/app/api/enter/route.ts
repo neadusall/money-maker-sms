@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { users, sessions } from "@/db/schema";
 import { SESSION_COOKIE } from "@/lib/auth";
+import { adoptLegacyTenantRows, normalizeTenant } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -29,20 +30,48 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "invalid or missing token" }, { status: 403 });
   }
 
-  const email = (process.env.ACCESS_EMAIL || (process.env.ALLOWED_EMAILS ?? "").split(",")[0] || "")
-    .trim()
-    .toLowerCase();
+  // Per-recruiter identity: the portal forwards the signed-in recruiter's
+  // email (+ name), so each person enters as THEMSELVES instead of one shared
+  // account. Only honored alongside the valid token (checked above), so an
+  // identity can't be forged without the shared secret. Falls back to the
+  // configured shared account when the caller sends no email.
+  const paramEmail = (url.searchParams.get("email") || "").trim().toLowerCase();
+  const email = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(paramEmail)
+    ? paramEmail
+    : (process.env.ACCESS_EMAIL || (process.env.ALLOWED_EMAILS ?? "").split(",")[0] || "")
+        .trim()
+        .toLowerCase();
   if (!email) {
     return NextResponse.json({ error: "no access email configured" }, { status: 500 });
   }
+  const name = (url.searchParams.get("name") || "").trim().slice(0, 80) || email.split("@")[0];
 
-  // Get or create the user this link signs in as.
+  // Get or create the user this link signs in as (an existing user's saved
+  // name wins over the forwarded one).
   let [user] = await db.select().from(users).where(eq(users.email, email));
   if (!user) {
     [user] = await db
       .insert(users)
-      .values({ email, name: email.split("@")[0], emailVerified: new Date() })
+      .values({ email, name, emailVerified: new Date() })
       .returning();
+  }
+
+  // TENANT ISOLATION: the portal forwards which tenant this entry belongs to
+  // (?ws=house | ?ws=<customer label>), trusted only alongside the valid token
+  // (checked above). Re-stamped on every entry so it heals itself after any
+  // drift, and legacy untagged rows on this tenant's owner-email domain are
+  // adopted so a customer's history follows them into their tenant. A caller
+  // that sends NO ws (older portal build, legacy link) changes nothing - the
+  // user keeps their last-stamped tenant rather than falling open to house.
+  const wsRaw = url.searchParams.get("ws");
+  if (wsRaw !== null) {
+    const tenant = normalizeTenant(wsRaw);
+    if (normalizeTenant(user.tenant) !== tenant) {
+      await db.update(users).set({ tenant }).where(eq(users.id, user.id));
+    }
+    await adoptLegacyTenantRows(tenant, email).catch((err) =>
+      console.error("[enter] legacy tenant adoption failed:", err),
+    );
   }
 
   // Create a long-lived database session and set the Auth.js session cookie.
@@ -53,6 +82,12 @@ export async function GET(req: Request) {
   // Use the shared cookie config so this matches what Auth.js reads/writes.
   // SameSite=None; Secure is what lets OS Text load inside the portal iframe on
   // cross-site domains (app.lumesp.com and white-label custom domains).
+  //
+  // Deliberately NOT the local name/secure pair this route used to compute for
+  // itself: lib/auth.ts builds the Auth.js cookie config from this same
+  // SESSION_COOKIE, and the two must agree. A session rotation on the updateAge
+  // boundary rewrites the cookie through Auth.js, so any drift here would
+  // silently downgrade a live session and break the embed hours after sign-in.
   const jar = await cookies();
   jar.set(SESSION_COOKIE.name, sessionToken, {
     httpOnly: true,
@@ -62,6 +97,16 @@ export async function GET(req: Request) {
     expires,
   });
 
-  const dest = process.env.AUTH_URL || new URL("/", req.url).toString();
-  return NextResponse.redirect(dest);
+  // Land in the app ON THE SAME HOST the user entered from (recruitersos.co or
+  // a white-label domain), forwarding the portal's theme + accent so the UI
+  // paints in the matching skin immediately. RELATIVE redirect, never absolute:
+  // behind the TLS-terminating proxy req.url is plain http://, and an absolute
+  // http:// Location inside an https:// iframe is mixed content, which the
+  // browser silently blocks (dead frame).
+  const dest = new URL("/ostext-app/", req.url);
+  const theme = url.searchParams.get("theme");
+  const accent = url.searchParams.get("accent");
+  if (theme === "dark" || theme === "light") dest.searchParams.set("theme", theme);
+  if (accent && /^#[0-9a-fA-F]{3,8}$/.test(accent)) dest.searchParams.set("accent", accent);
+  return new NextResponse(null, { status: 302, headers: { Location: dest.pathname + dest.search } });
 }

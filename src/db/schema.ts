@@ -95,6 +95,10 @@ export const classificationLabel = pgEnum("classification_label", [
 export const campaigns = pgTable("campaigns", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
+  // Which portal tenant owns this campaign on a shared engine ("house" = the
+  // operator; a white-label customer gets its own label, e.g. its email
+  // domain). NULL = legacy row, treated as house everywhere (see lib/tenant).
+  tenant: text("tenant"),
   status: campaignStatus("status").default("draft").notNull(),
   llmMode: llmMode("llm_mode").default("draft_only").notNull(),
 
@@ -151,6 +155,33 @@ export const campaigns = pgTable("campaigns", {
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
+});
+
+/**
+ * Saved campaign setups ("templates"): a recruiter saves a campaign they like
+ * once, then applies it to any new (usually pushed) campaign from a dropdown,
+ * so setup is two clicks + the send date & time. Deliberately NOT saved:
+ * name, fromNumber (the recruiter's own line), salesNavUrl, and scheduledAt
+ * (the send-date fail-safe must stay a per-campaign human decision).
+ */
+export const campaignTemplates = pgTable("campaign_templates", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  // Unique PER TENANT (raw index in lib/tenant ensureTenantSchema): re-saving
+  // under the same name updates that tenant's template in place.
+  name: text("name").notNull(),
+  tenant: text("tenant"),
+  llmMode: llmMode("llm_mode").default("draft_only").notNull(),
+  smsTemplate: text("sms_template").notNull(),
+  positionSummary: text("position_summary"),
+  recruiterName: text("recruiter_name"),
+  recruiterEmail: text("recruiter_email"),
+  calendarLink: text("calendar_link"),
+  sendWindowStart: text("send_window_start").default("09:00").notNull(),
+  sendWindowEnd: text("send_window_end").default("19:00").notNull(),
+  targetRegion: text("target_region"),
+  minScoreToSend: integer("min_score_to_send"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export const contacts = pgTable(
@@ -309,9 +340,13 @@ export const suppressedNumbers = pgTable(
   "suppressed_numbers",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    // "Already contacted" is a fact about the NUMBER, not the campaign, so this
+    // ledger must outlive the campaign that wrote it: deleting a duplicate
+    // campaign used to cascade its suppression rows away and blind the
+    // cross-campaign guard for exactly the people that campaign had texted.
+    // SET NULL keeps the row (phone + reason) with the campaign reference gone.
     campaignId: uuid("campaign_id")
-      .references(() => campaigns.id, { onDelete: "cascade" })
-      .notNull(),
+      .references(() => campaigns.id, { onDelete: "set null" }),
     phone: text("phone").notNull(),
     reason: text("reason"),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -358,6 +393,33 @@ export const todos = pgTable(
   }),
 );
 
+// One row per conversation with an unanswered candidate reply: drives the
+// recruiter cell-phone alerts (instant text on reply, then a nag every
+// OSTEXT_ALERT_NAG_MINUTES until the recruiter responds in the thread).
+export const replyAlerts = pgTable(
+  "reply_alerts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    conversationId: uuid("conversation_id")
+      .references(() => conversations.id, { onDelete: "cascade" })
+      .notNull()
+      .unique("reply_alerts_conversation_unique"),
+
+    // When the candidate's latest unanswered message arrived. A recruiter
+    // outbound after this moment (with human takeover) resolves the alert.
+    lastInboundAt: timestamp("last_inbound_at", { withTimezone: true }).notNull(),
+
+    lastAlertAt: timestamp("last_alert_at", { withTimezone: true }),
+    alertCount: integer("alert_count").default(0).notNull(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    openIdx: index("reply_alerts_open_idx").on(t.resolvedAt, t.lastAlertAt),
+  }),
+);
+
 export const usageEvents = pgTable(
   "usage_events",
   {
@@ -382,6 +444,9 @@ export const users = pgTable("user", {
   email: text("email").unique(),
   emailVerified: timestamp("emailVerified", { mode: "date", withTimezone: true }),
   image: text("image"),
+  // Portal tenant this person belongs to, re-stamped on every SSO entry
+  // (/api/enter?ws=...). NULL = legacy/house (see lib/tenant).
+  tenant: text("tenant"),
 });
 
 export const accounts = pgTable(
@@ -428,6 +493,7 @@ export const verificationTokens = pgTable(
 
 export type Campaign = typeof campaigns.$inferSelect;
 export type NewCampaign = typeof campaigns.$inferInsert;
+export type CampaignTemplate = typeof campaignTemplates.$inferSelect;
 export type Contact = typeof contacts.$inferSelect;
 export type NewContact = typeof contacts.$inferInsert;
 export type Conversation = typeof conversations.$inferSelect;
@@ -435,6 +501,7 @@ export type Message = typeof messages.$inferSelect;
 export type ScheduledMessage = typeof scheduledMessages.$inferSelect;
 export type SuppressedNumber = typeof suppressedNumbers.$inferSelect;
 export type Todo = typeof todos.$inferSelect;
+export type ReplyAlert = typeof replyAlerts.$inferSelect;
 export type NewTodo = typeof todos.$inferInsert;
 export type TodoChannel = (typeof todoChannel.enumValues)[number];
 export type ClassificationLabel = (typeof classificationLabel.enumValues)[number];

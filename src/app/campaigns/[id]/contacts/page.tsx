@@ -2,7 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { and, desc, eq, isNull, ne, sql, inArray } from "drizzle-orm";
 import { db } from "@/db/client";
-import { campaigns, contacts, suppressedNumbers } from "@/db/schema";
+import { contacts, suppressedNumbers } from "@/db/schema";
+import { tenantCampaign } from "@/lib/tenant";
 import {
   uploadContactsCsv,
   deleteContact,
@@ -14,6 +15,7 @@ import {
   setMinScore,
 } from "@/lib/actions";
 import { formatPhone } from "@/lib/phone";
+import { CallButton } from "@/components/CallButton";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { ScoreBadge } from "@/components/ScoreBadge";
 import { LocationBadge } from "@/components/LocationBadge";
@@ -30,7 +32,7 @@ export default async function ContactsPage({
 }) {
   const { id } = await params;
   const sp = await searchParams;
-  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, id));
+  const campaign = await tenantCampaign(id);
   if (!campaign) notFound();
 
   const minScore = campaign.minScoreToSend ?? 0;
@@ -100,15 +102,15 @@ export default async function ContactsPage({
       {uploadAdded !== null ? (
         <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
           <span className="font-semibold">Upload complete.</span> Added{" "}
-          <strong>{uploadAdded}</strong> new contact{uploadAdded === 1 ? "" : "s"} — ready to send.
+          <strong>{uploadAdded}</strong> new contact{uploadAdded === 1 ? "" : "s"}, ready to send.
           {uploadDup > 0 ? (
             <> {uploadDup} duplicate{uploadDup === 1 ? "" : "s"} removed (already in this campaign).</>
           ) : null}
           {uploadPrev > 0 ? (
-            <> {uploadPrev} skipped — already texted in another campaign.</>
+            <> {uploadPrev} skipped: already texted in another campaign.</>
           ) : null}
           {uploadRegion > 0 ? (
-            <> {uploadRegion} skipped — outside the selected region(s).</>
+            <> {uploadRegion} skipped: outside the selected region(s).</>
           ) : null}
           {uploadPrev > 0 ? (
             <span className="mt-1 block text-xs text-emerald-700">
@@ -150,7 +152,7 @@ export default async function ContactsPage({
           <ConfirmButton
             action={clearSuppression}
             confirmLabel="Clear the skip list"
-            className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs text-zinc-600 hover:bg-zinc-50"
+            className="rounded-md border border-zinc-300 bg-surface px-2.5 py-1 text-xs text-zinc-600 hover:bg-zinc-50"
           >
             Clear skip list
           </ConfirmButton>
@@ -163,14 +165,14 @@ export default async function ContactsPage({
             <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" className="opacity-25" />
             <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
           </svg>
-          Validating {validatingCount} number{validatingCount === 1 ? "" : "s"} through Telnyx — landlines are being
+          Validating {validatingCount} number{validatingCount === 1 ? "" : "s"} through Telnyx: landlines are being
           removed. This updates automatically.
         </div>
       ) : sendableCount > 0 ? (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm text-zinc-600">
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-zinc-200 bg-surface px-4 py-2.5 text-sm text-zinc-600">
           <span>Validate existing numbers and drop any landlines before sending.</span>
           <form action={validateNow}>
-            <button className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50">
+            <button className="rounded-md border border-zinc-300 bg-surface px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50">
               Validate numbers now
             </button>
           </form>
@@ -178,7 +180,7 @@ export default async function ContactsPage({
       ) : null}
 
       {totalCount > 0 ? (
-        <div className="rounded-lg border border-zinc-200 bg-white p-5">
+        <div className="rounded-lg border border-zinc-200 bg-surface p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-sm font-semibold text-zinc-900">Candidate fit scoring</h2>
@@ -200,7 +202,7 @@ export default async function ContactsPage({
                 <span className="text-xs text-emerald-600">All {scoredCount} scored</span>
               )}
               <form action={scoreFit}>
-                <button className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50">
+                <button className="rounded-md border border-zinc-300 bg-surface px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50">
                   {unscoredCount > 0 ? "Score now" : "Re-score new"}
                 </button>
               </form>
@@ -230,13 +232,13 @@ export default async function ContactsPage({
             <div className="mt-3 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
               Sends go to the <strong>{qualifyCount}</strong> pending contact{qualifyCount === 1 ? "" : "s"} scoring{" "}
               <strong>≥ {minScore}</strong>. Anyone below the bar is skipped (not deleted).
-              {unscoredCount > 0 ? " Scoring is still running — wait for it to finish before sending." : ""}
+              {unscoredCount > 0 ? " Scoring is still running: wait for it to finish before sending." : ""}
             </div>
           ) : null}
         </div>
       ) : null}
 
-      <form action={upload} className="rounded-lg border border-dashed border-zinc-300 bg-white p-5">
+      <form action={upload} className="rounded-lg border border-dashed border-zinc-300 bg-surface p-5">
         <label className="block">
           <span className="block text-sm font-medium">CSV file</span>
           <input
@@ -258,17 +260,17 @@ export default async function ContactsPage({
         <p className="mt-2 text-xs text-zinc-500">
           The entire list uploads and auto-scores. You then pick who to text by fit score.
         </p>
-        <button className="mt-4 rounded-md bg-zinc-900 px-3 py-1.5 text-sm text-white hover:bg-zinc-800">
+        <button className="mt-4 rounded-md bg-ink px-3 py-1.5 text-sm text-white hover:bg-ink-soft">
           Upload contacts
         </button>
       </form>
 
       {rows.length === 0 ? (
-        <div className="rounded-lg border border-zinc-200 bg-white p-6 text-center text-sm text-zinc-500">
+        <div className="rounded-lg border border-zinc-200 bg-surface p-6 text-center text-sm text-zinc-500">
           No contacts yet. Upload a CSV to get started.
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white">
+        <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-surface">
           <table className="min-w-full divide-y divide-zinc-200 text-sm">
             <thead className="bg-zinc-50 text-left text-xs uppercase tracking-wide text-zinc-500">
               <tr>
@@ -292,7 +294,7 @@ export default async function ContactsPage({
                       <div className="flex items-center gap-2">
                         <span>
                           {[c.firstName, c.lastName].filter(Boolean).join(" ") || (
-                            <span className="text-zinc-400">—</span>
+                            <span className="text-zinc-400">-</span>
                           )}
                         </span>
                         {prevTexted.has(c.phone) ? (
@@ -306,14 +308,23 @@ export default async function ContactsPage({
                         <LocationBadge match={c.locationMatch} region={c.locationRegion} />
                       </div>
                     </td>
-                    <td className="px-3 py-2 font-mono text-xs">{formatPhone(c.phone)}</td>
-                    <td className="px-3 py-2">{c.company ?? <span className="text-zinc-400">—</span>}</td>
-                    <td className="px-3 py-2">{c.jobTitle ?? <span className="text-zinc-400">—</span>}</td>
+                    <td className="px-3 py-2 font-mono text-xs">
+                      <span className="inline-flex items-center gap-1">
+                        {formatPhone(c.phone)}
+                        <CallButton
+                          phone={c.phone}
+                          name={[c.firstName, c.lastName].filter(Boolean).join(" ")}
+                          company={c.company}
+                        />
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">{c.company ?? <span className="text-zinc-400">-</span>}</td>
+                    <td className="px-3 py-2">{c.jobTitle ?? <span className="text-zinc-400">-</span>}</td>
                     <td className="px-3 py-2">
                       {c.qualificationScore != null ? (
                         <ScoreBadge score={c.qualificationScore} reason={c.qualificationReason} label="" />
                       ) : (
-                        <span className="text-zinc-300">—</span>
+                        <span className="text-zinc-300">-</span>
                       )}
                     </td>
                     <td className="px-3 py-2">

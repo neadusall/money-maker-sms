@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Avatar } from "./Avatar";
+import { CallButton } from "./CallButton";
 import { DeleteConversationButton } from "./DeleteConversationButton";
 import { formatPhone } from "@/lib/phone";
 import { shortRelative } from "@/lib/time";
@@ -70,7 +71,7 @@ export function ConversationList({
     const ctrl = new AbortController();
     const t = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/campaigns/${campaignId}/search?q=${encodeURIComponent(term)}`, {
+        const res = await fetch(`/ostext-app/api/campaigns/${campaignId}/search?q=${encodeURIComponent(term)}`, {
           signal: ctrl.signal,
         });
         const json = (await res.json()) as { results?: ConversationListItem[] };
@@ -105,7 +106,7 @@ export function ConversationList({
   const openCount = conversations.filter((c) => c.status !== "closed").length;
 
   return (
-    <aside className="flex h-full w-full flex-col border-r border-zinc-200 bg-white sm:w-[360px]">
+    <aside className="flex h-full w-full flex-col border-r border-zinc-200 bg-surface sm:w-[360px]">
       <div className="border-b border-zinc-200 px-4 py-3">
         <div className="flex items-baseline justify-between">
           <div>
@@ -126,7 +127,7 @@ export function ConversationList({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search name, phone, message…"
-            className="w-full rounded-md border border-zinc-300 bg-zinc-50 px-3 py-1.5 text-sm placeholder:text-zinc-400 focus:border-zinc-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-zinc-500"
+            className="w-full rounded-md border border-zinc-300 bg-zinc-50 px-3 py-1.5 text-sm placeholder:text-zinc-400 focus:border-zinc-500 focus:bg-surface focus:outline-none focus:ring-1 focus:ring-zinc-500"
           />
         </div>
         <div className="mt-2 flex flex-wrap gap-1.5">
@@ -143,7 +144,7 @@ export function ConversationList({
                 className={
                   "rounded-full px-2.5 py-0.5 text-xs " +
                   (active
-                    ? "bg-zinc-900 text-white"
+                    ? "bg-ink text-white"
                     : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200")
                 }
               >
@@ -187,6 +188,11 @@ export function ConversationList({
               return (
                 <li key={c.id} className="relative">
                   <div className="absolute right-2 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5">
+                    <CallButton
+                      phone={c.contact.phone}
+                      name={name}
+                      company={c.contact.company}
+                    />
                     <a
                       href={li.url}
                       target="_blank"
@@ -208,7 +214,7 @@ export function ConversationList({
                   <Link
                     href={href}
                     className={
-                      "block py-3 pl-4 pr-12 transition-colors " +
+                      "block py-3 pl-4 pr-24 transition-colors " +
                       (isActive
                         ? "bg-sky-50"
                         : c.status === "needs_attention"

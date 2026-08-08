@@ -3,6 +3,7 @@ import { db } from "@/db/client";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { LiveBadge } from "@/components/LiveBadge";
 import { KpiCard, MiniStat } from "@/components/Stats";
+import { HOUSE_TENANT, sessionViewer } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,20 @@ async function many(q: Parameters<typeof db.execute>[0]): Promise<Record<string,
 }
 
 export default async function SpendPage() {
+  // The spend audit is the OPERATOR's cost view (infra totals, engine-wide
+  // message segments, enrichment). On a shared engine those numbers are house
+  // data, so non-house tenants get a quiet empty state instead of the ledger -
+  // and even inside the house tenant, only an admin/owner sees it (a regular
+  // recruiter has no business seeing the team's cost ledger).
+  const viewer = await sessionViewer();
+  if (viewer.tenant !== HOUSE_TENANT || !viewer.isAdmin) {
+    return (
+      <section>
+        <h1 className="text-2xl font-semibold tracking-tight">Spend</h1>
+        <p className="mt-2 text-sm text-zinc-600">Spend reporting is not available on this account.</p>
+      </section>
+    );
+  }
   const llm = await one(sql`
     SELECT coalesce(sum(cost_usd),0)::float AS total,
            coalesce(sum(cost_usd) FILTER (WHERE created_at >= date_trunc('month', now())),0)::float AS mtd,
@@ -129,7 +144,7 @@ export default async function SpendPage() {
         <KpiCard label="Running total (all-time)" value={usd(allVariable)} accent="zinc" hint="usage across all services" />
         <KpiCard label="Today" value={usd(todayTotal)} accent="amber" chip={`${usd(todayLlm)} LLM`} hint={`since midnight ${TZ}`} />
         <KpiCard label="This month" value={usd(monthTotal)} accent="sky" hint="usage + fixed costs" />
-        <KpiCard label="LLM (Anthropic)" value={usd(llmTotal)} accent="violet" chip={`${Number(llm.calls ?? 0)} calls`} hint="all-time — scoring + replies" />
+        <KpiCard label="LLM (Anthropic)" value={usd(llmTotal)} accent="violet" chip={`${Number(llm.calls ?? 0)} calls`} hint="all-time: scoring + replies" />
       </div>
 
       <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
@@ -148,7 +163,7 @@ export default async function SpendPage() {
           contact you upload is scored once by Claude against the job description{" "}
           {perScore > 0 ? (
             <>
-              — about <strong>{usd(perScore)}</strong> per candidate ({scoreCalls.toLocaleString()} scored so far ={" "}
+              : about <strong>{usd(perScore)}</strong> per candidate ({scoreCalls.toLocaleString()} scored so far ={" "}
               {usd(scoreCost)}).
             </>
           ) : (
@@ -160,13 +175,13 @@ export default async function SpendPage() {
         </p>
         <p className="mt-2 text-xs text-violet-800/80">
           LLM spend is metered from real token usage on every call, so this updates the moment scoring or a reply runs.
-          Scoring a large new list is the main thing that moves this number — and what can exhaust your Anthropic credit
+          Scoring a large new list is the main thing that moves this number, and what can exhaust your Anthropic credit
           balance if it isn&apos;t topped up.
         </p>
       </div>
 
       {/* Daily spend, last 14 days */}
-      <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+      <div className="rounded-2xl border border-zinc-200 bg-surface p-5 shadow-sm">
         <div className="flex items-baseline justify-between">
           <h3 className="text-sm font-semibold text-zinc-700">Daily spend</h3>
           <span className="text-[10px] uppercase tracking-wide text-zinc-400">last 14 days · {TZ}</span>
@@ -199,12 +214,12 @@ export default async function SpendPage() {
 
       {/* Breakdown by service */}
       <div className="grid gap-3 lg:grid-cols-3">
-        <Panel title="Telnyx — SMS" total={usd(smsCost)} sub="all-time">
+        <Panel title="Telnyx: SMS" total={usd(smsCost)} sub="all-time">
           <Line label={`Outbound (${outb} msgs → ${outbSeg} segs)`} detail={`@ ${usd(SMS_OUT)}/seg`} value={usd(outbSeg * SMS_OUT)} />
           <Line label={`Inbound (${inb})`} detail={`@ ${usd(SMS_IN)}/msg`} value={usd(inb * SMS_IN)} />
         </Panel>
 
-        <Panel title="LLM — Anthropic" total={usd(llmTotal)} sub="all-time">
+        <Panel title="LLM: Anthropic" total={usd(llmTotal)} sub="all-time">
           {byPurpose.length === 0 ? (
             <div className="text-xs text-zinc-400">No LLM usage logged yet.</div>
           ) : (
@@ -219,7 +234,7 @@ export default async function SpendPage() {
           )}
         </Panel>
 
-        <Panel title="LinkedIn — RapidAPI" total={usd(liCost)} sub="all-time, usage">
+        <Panel title="LinkedIn: RapidAPI" total={usd(liCost)} sub="all-time, usage">
           <Line label={`Profiles enriched (${enriched})`} detail={`@ ${usd(PROFILE_COST)}/profile`} value={usd(liCost)} />
           <Line label="Monthly plan" detail="15,000 requests included" value={usd(RAPIDAPI_MO) + "/mo"} />
         </Panel>
@@ -229,17 +244,17 @@ export default async function SpendPage() {
         <p className="font-medium text-zinc-700">How each number is tracked</p>
         <ul className="mt-1.5 list-disc space-y-1 pl-4">
           <li>
-            <strong>LLM (Anthropic) — exact.</strong> Every Claude call (scoring, rubric, reply classification &amp;
+            <strong>LLM (Anthropic): exact.</strong> Every Claude call (scoring, rubric, reply classification &amp;
             drafting, to-do extraction) logs its real token usage and cost the instant it runs, so this updates live as
             each list is scored.
           </li>
           <li>
-            <strong>SMS (Telnyx) — segment-estimated.</strong> Outbound is billed per 153-char segment (incl. the
+            <strong>SMS (Telnyx): segment-estimated.</strong> Outbound is billed per 153-char segment (incl. the
             appended &quot;Reply STOP to opt out.&quot; line), {usd(SMS_OUT)}/segment; inbound {usd(SMS_IN)}/message.
             Assumes standard (GSM-7) text.
           </li>
           <li>
-            <strong>LinkedIn (RapidAPI) — per profile pulled,</strong> {usd(PROFILE_COST)}/profile, within the{" "}
+            <strong>LinkedIn (RapidAPI): per profile pulled,</strong> {usd(PROFILE_COST)}/profile, within the{" "}
             {usd(RAPIDAPI_MO)}/mo plan (15,000 requests). Lookups that return nothing aren&apos;t charged here.
           </li>
           <li>
@@ -254,7 +269,7 @@ export default async function SpendPage() {
 
 function Panel({ title, total, sub, children }: { title: string; total: string; sub: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+    <div className="rounded-2xl border border-zinc-200 bg-surface p-5 shadow-sm">
       <div className="flex items-baseline justify-between">
         <h3 className="text-sm font-semibold text-zinc-700">{title}</h3>
         <div className="text-right">

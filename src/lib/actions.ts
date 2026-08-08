@@ -2,10 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { and, eq, isNull, ne, desc, sql, inArray } from "drizzle-orm";
+import { and, eq, isNull, ne, or, desc, sql, inArray } from "drizzle-orm";
 import { db } from "@/db/client";
 import {
   campaigns,
+  campaignTemplates,
   contacts,
   conversations,
   messages,
@@ -19,6 +20,8 @@ import {
   type TodoChannel,
 } from "@/db/schema";
 import { auth, signOut } from "./auth";
+import { assertTenantCampaign, normalizeTenant, sessionTenant, tenantCanSee } from "./tenant";
+import { phonesClaimedByOtherCampaigns } from "./contact-dedup";
 
 export async function signOutAction() {
   await signOut({ redirectTo: "/login" });
@@ -27,10 +30,14 @@ import { parseCsv, type ImportedContact } from "./csv";
 import { regionForLocation, type RegionKey } from "./region";
 import { alwaysAllowNumbers } from "./always-allow";
 import { seedContacts } from "./seed-contacts";
-import { renderTemplate, findUnmergedTokens } from "./merge";
 import { sendSms } from "./telnyx";
+import { telnyxCredsForTenant } from "./tenant-telnyx";
+import { processContactSend } from "./send";
+import { canonicalizeTemplate, auditTemplate, describeAudit } from "./merge";
 import { normalizePhone } from "./phone";
 import { isStopKeyword } from "./opt-out";
+import { recordOptOut } from "./opt-out-record";
+import { recordReplyAlert } from "./reply-alerts";
 import { classifyReply, isAutoSendCandidate, isAutoIgnoreNegative } from "./classify";
 import { draftReply } from "./draft-reply";
 import { paceForNextSend } from "./pacing";
@@ -43,6 +50,7 @@ import {
   enqueueValidationDrain,
   enqueueScoreDrain,
 } from "./schedule";
+import { kickSoon } from "./internal-clock";
 import {
   isPositionEmailConfigured,
   extractEmail,
@@ -62,6 +70,16 @@ function str(formData: FormData, key: string): string | null {
   return trimmed === "" ? null : trimmed;
 }
 
+// Normalize the optional campaign From number to E.164 on save, so Telnyx never
+// rejects it as an invalid messaging source (error 40013 - what a bare
+// "5162598279" without the +1 triggers). Kept raw only when it can't be parsed,
+// so an intentional entry is never silently wiped; the send path re-normalizes
+// as a backstop.
+function fromE164(formData: FormData): string | null {
+  const v = str(formData, "fromNumber");
+  return v ? normalizePhone(v) ?? v : null;
+}
+
 // Parse the optional "Schedule send" datetime-local field. The browser sends a
 // naive wall-clock string ("YYYY-MM-DDTHH:mm"); interpret it in APP_TIMEZONE.
 // Returns null when blank (no schedule) so the column clears.
@@ -72,18 +90,21 @@ function parseScheduledAt(formData: FormData): Date | null {
 }
 
 /**
- * If a campaign has a future schedule and QStash is available, arm it: mark it
- * active and kick off the drain, which then bounces (waiting on the schedule, the
- * send window, and fit scoring) until the scheduled moment and sends. No-op when
- * the schedule is blank/past or QStash isn't configured — the user launches
- * manually with the Launch button in that case.
+ * If a campaign has a future schedule, arm it: mark it active and kick off the
+ * drain, which then bounces (waiting on the schedule, the send window, and fit
+ * scoring) until the scheduled moment and sends. QStash carries the wait when
+ * configured; otherwise the internal clock re-checks every sweep. No-op when
+ * the schedule is blank/past — the user launches manually in that case.
  */
 async function maybeArmSchedule(campaignId: string, scheduledAt: Date | null): Promise<void> {
   if (!scheduledAt || scheduledAt.getTime() <= Date.now()) return;
-  if (!isQStashConfigured()) return;
   await db.update(campaigns).set({ status: "active", updatedAt: new Date() }).where(eq(campaigns.id, campaignId));
-  const secs = Math.min(6 * 3600, Math.max(60, Math.ceil((scheduledAt.getTime() - Date.now()) / 1000)));
-  await enqueueCampaignDrain(campaignId, secs);
+  if (isQStashConfigured()) {
+    const secs = Math.min(6 * 3600, Math.max(60, Math.ceil((scheduledAt.getTime() - Date.now()) / 1000)));
+    await enqueueCampaignDrain(campaignId, secs);
+  } else {
+    kickSoon();
+  }
 }
 
 /**
@@ -138,9 +159,25 @@ async function categorizeUpload(
     .from(suppressedNumbers)
     .where(and(eq(suppressedNumbers.campaignId, campaignId), inArray(suppressedNumbers.phone, phones)));
 
+  // CROSS-RECRUITER DEDUPE: numbers a DIFFERENT campaign in this tenant already
+  // works are treated as duplicates too, so a CSV upload can't quietly double up
+  // on a candidate/client another recruiter is already texting. Tenant-scoped,
+  // self-excluding, first-campaign-wins (see lib/contact-dedup). Seed/always-allow
+  // numbers (e.g. your own line) stay exempt so you still seed every campaign.
+  const [camp] = await db
+    .select({ tenant: campaigns.tenant })
+    .from(campaigns)
+    .where(eq(campaigns.id, campaignId));
+  const claimedElsewhere = await phonesClaimedByOtherCampaigns(
+    normalizeTenant(camp?.tenant),
+    campaignId,
+    phones,
+  );
+
   const inCampaign = new Set<string>();
   for (const r of existing) if (!allow.has(r.phone)) inCampaign.add(r.phone);
   for (const r of supp) if (!allow.has(r.phone)) inCampaign.add(r.phone);
+  for (const p of claimedElsewhere) if (!allow.has(p)) inCampaign.add(p);
 
   const prev = skipPrev ? await previouslyTextedPhones(phones, campaignId) : new Set<string>();
   // ALWAYS skip numbers that have opted out (replied STOP) anywhere — regardless
@@ -183,7 +220,12 @@ async function previouslyTextedPhones(phones: string[], excludeCampaignId: strin
   const fromSuppression = await db
     .select({ phone: suppressedNumbers.phone })
     .from(suppressedNumbers)
-    .where(and(inArray(suppressedNumbers.phone, uniq), ne(suppressedNumbers.campaignId, excludeCampaignId)));
+    // NULL campaignId = the writing campaign was deleted; the prior contact still
+    // counts (SQL `ne` alone silently drops NULL rows).
+    .where(and(
+      inArray(suppressedNumbers.phone, uniq),
+      or(isNull(suppressedNumbers.campaignId), ne(suppressedNumbers.campaignId, excludeCampaignId)),
+    ));
   const fromContacts = await db
     .select({ phone: contacts.phone })
     .from(contacts)
@@ -218,6 +260,44 @@ async function optedOutPhones(phones: string[]): Promise<Set<string>> {
   return result;
 }
 
+/* --- Merge-token fail-safes ---------------------------------------------------
+ * A recruiter types the template by hand, so it is the one place a single typo
+ * can silently cost a whole campaign. Two guards, applied everywhere:
+ *   - canonicalizeTemplate on every WRITE, so what's stored is what the send
+ *     path reads ({FirstName} and {name} are saved as {first_name}).
+ *   - assertTemplateCanSend before anything GOES OUT, so a template that
+ *     resolves for nobody stops the recruiter with a sentence instead of
+ *     reporting "0 sent" an hour later. */
+
+/**
+ * Refuse to start sending a template that no contact can receive. Deliberately
+ * only blocks the total-failure case: partial gaps ("40 of 500 have no company")
+ * are the recruiter's call and still send to everyone who resolves.
+ */
+async function assertTemplateCanSend(campaign: Campaign): Promise<void> {
+  const audience = await db
+    .select()
+    .from(contacts)
+    .where(
+      and(
+        eq(contacts.campaignId, campaign.id),
+        eq(contacts.status, "pending"),
+        eq(contacts.optedOut, false),
+        isNull(contacts.deletedAt),
+        campaign.minScoreToSend
+          ? sql`${contacts.qualificationScore} >= ${campaign.minScoreToSend}`
+          : undefined,
+      ),
+    );
+  if (audience.length === 0) return; // nothing queued yet — not a template problem
+  const audit = auditTemplate(campaign.smsTemplate, audience);
+  if (!audit.blocksEveryone) return;
+  throw new Error(
+    describeAudit(audit) ??
+      "This message can't be sent to anyone on the list. Check the merge fields in the template.",
+  );
+}
+
 export async function createCampaign(formData: FormData) {
   const name = str(formData, "name");
   const smsTemplate = str(formData, "smsTemplate");
@@ -231,13 +311,16 @@ export async function createCampaign(formData: FormData) {
     .insert(campaigns)
     .values({
       name,
-      smsTemplate,
+      // A campaign created in the UI belongs to its creator's tenant, so it
+      // renders only inside that tenant's portal (shared-engine isolation).
+      tenant: await sessionTenant(),
+      smsTemplate: canonicalizeTemplate(smsTemplate),
       llmMode: llmModeValue,
       positionSummary: str(formData, "positionSummary"),
       calendarLink: str(formData, "calendarLink"),
       recruiterName: str(formData, "recruiterName"),
       recruiterEmail: str(formData, "recruiterEmail"),
-      fromNumber: str(formData, "fromNumber"),
+      fromNumber: fromE164(formData),
       salesNavUrl: str(formData, "salesNavUrl"),
       targetRegion: str(formData, "targetRegion"),
       // Default fit bar: only text candidates scoring >= 50 unless changed.
@@ -269,7 +352,9 @@ export async function createCampaign(formData: FormData) {
   const file = formData.get("csv");
   let summary: { added: number; prev: number; dup: number; region: number } | null = null;
   if (file instanceof File && file.size > 0) {
-    const validate = formData.get("validateMobile") != null && isQStashConfigured();
+    // Validation no longer depends on QStash: the internal clock drains
+  // "validating" contacts too, so the checkbox alone decides.
+  const validate = formData.get("validateMobile") != null;
     const skipPrev = formData.get("skipPreviouslyTexted") != null;
     const text = await file.text();
     const result = parseCsv(text);
@@ -297,9 +382,13 @@ export async function createCampaign(formData: FormData) {
           })),
         )
         .onConflictDoNothing({ target: [contacts.campaignId, contacts.phone] });
-      if (validate) await enqueueValidationDrain(created.id, 1);
       // Score everyone's fit for the role in the background.
-      if (isQStashConfigured()) await enqueueScoreDrain(created.id, 3);
+      if (isQStashConfigured()) {
+        if (validate) await enqueueValidationDrain(created.id, 1);
+        await enqueueScoreDrain(created.id, 3);
+      } else {
+        kickSoon();
+      }
     }
     summary = { added: toInsert.length, prev: prevSkipped, dup: dupSkipped, region: outOfRegion };
   }
@@ -316,6 +405,7 @@ export async function createCampaign(formData: FormData) {
 }
 
 export async function deleteCampaign(campaignId: string) {
+  await assertTenantCampaign(campaignId); // never delete across the tenant wall
   await db.delete(campaigns).where(eq(campaigns.id, campaignId));
   revalidatePath("/");
   redirect("/");
@@ -342,18 +432,22 @@ export async function removeProfileImage() {
 }
 
 export async function updateCampaign(campaignId: string, formData: FormData) {
+  await assertTenantCampaign(campaignId);
   const scheduledAt = parseScheduledAt(formData);
   await db
     .update(campaigns)
     .set({
       name: str(formData, "name") ?? undefined,
-      smsTemplate: str(formData, "smsTemplate") ?? undefined,
+      smsTemplate: (() => {
+        const t = str(formData, "smsTemplate");
+        return t ? canonicalizeTemplate(t) : undefined;
+      })(),
       llmMode: (str(formData, "llmMode") as LlmMode | null) ?? undefined,
       positionSummary: str(formData, "positionSummary"),
       calendarLink: str(formData, "calendarLink"),
       recruiterName: str(formData, "recruiterName"),
       recruiterEmail: str(formData, "recruiterEmail"),
-      fromNumber: str(formData, "fromNumber"),
+      fromNumber: fromE164(formData),
       salesNavUrl: str(formData, "salesNavUrl"),
       targetRegion: str(formData, "targetRegion"),
       sendWindowStart: str(formData, "sendWindowStart") ?? undefined,
@@ -369,7 +463,100 @@ export async function updateCampaign(campaignId: string, formData: FormData) {
 }
 
 export async function setCampaignStatus(campaignId: string, status: "active" | "paused" | "completed" | "draft") {
+  const campaign = await assertTenantCampaign(campaignId);
+  // Going active is the moment a template stops being a draft and starts being
+  // texts. Check it here so the recruiter is told at the click, not by a silent
+  // "0 sent" later. Pausing/completing must never be blocked.
+  if (status === "active") await assertTemplateCanSend(campaign);
   await db.update(campaigns).set({ status, updatedAt: new Date() }).where(eq(campaigns.id, campaignId));
+  // Activate/Resume must actually START the pipeline, not just recolor the badge:
+  // kick the drain so validation, scoring, and sending proceed on their own.
+  if (status === "active") {
+    if (isQStashConfigured()) await enqueueCampaignDrain(campaignId, 1);
+    else kickSoon();
+  }
+  revalidatePath("/");
+  revalidatePath(`/campaigns/${campaignId}`);
+}
+
+/* ---------------- Campaign templates: save a setup once, deploy it fast ----------------
+ * A recruiter saves a campaign they like as a named template, then applies it to
+ * any new (usually pushed) campaign from a dropdown: setup becomes two clicks
+ * plus the send date & time. Applying a template NEVER touches name, status,
+ * fromNumber, salesNavUrl, or scheduledAt: the send-date fail-safe stays a
+ * per-campaign human decision, so applying a template can never start sending. */
+
+export async function saveCampaignTemplate(campaignId: string, formData: FormData): Promise<void> {
+  const name = (str(formData, "templateName") ?? "").slice(0, 120);
+  if (!name) return;
+  const campaign = await assertTenantCampaign(campaignId);
+  const tenant = await sessionTenant();
+  const values = {
+    name,
+    tenant,
+    llmMode: campaign.llmMode,
+    smsTemplate: canonicalizeTemplate(campaign.smsTemplate),
+    positionSummary: campaign.positionSummary,
+    recruiterName: campaign.recruiterName,
+    recruiterEmail: campaign.recruiterEmail,
+    calendarLink: campaign.calendarLink,
+    sendWindowStart: campaign.sendWindowStart,
+    sendWindowEnd: campaign.sendWindowEnd,
+    targetRegion: campaign.targetRegion,
+    minScoreToSend: campaign.minScoreToSend,
+  };
+  // Same name = update in place, so "save" is always safe to press again -
+  // matched WITHIN THIS TENANT only (uniqueness is per tenant now), so a
+  // customer's "Default" can never overwrite the house's "Default".
+  const [existing] = await db
+    .select({ id: campaignTemplates.id })
+    .from(campaignTemplates)
+    .where(and(eq(campaignTemplates.name, name), sql`coalesce(nullif(trim(${campaignTemplates.tenant}), ''), 'house') = ${tenant}`));
+  if (existing) {
+    await db.update(campaignTemplates).set({ ...values, updatedAt: new Date() }).where(eq(campaignTemplates.id, existing.id));
+  } else {
+    await db.insert(campaignTemplates).values(values);
+  }
+  revalidatePath(`/campaigns/${campaignId}`);
+}
+
+export async function applyCampaignTemplate(campaignId: string, formData: FormData): Promise<void> {
+  const templateId = str(formData, "templateId");
+  if (!templateId) return;
+  await assertTenantCampaign(campaignId);
+  const [t] = await db.select().from(campaignTemplates).where(eq(campaignTemplates.id, templateId));
+  if (!t || !tenantCanSee(await sessionTenant(), t.tenant)) return;
+  // Blank template fields never wipe values the campaign already has (e.g. the
+  // recruiter name a push filled in). A changed position summary invalidates the
+  // cached scoring rubric so future fit scores use the new role context.
+  await db
+    .update(campaigns)
+    .set({
+      llmMode: t.llmMode,
+      // Canonicalized on apply too: templates saved before the merge-token
+      // normalization existed can still carry a raw {FirstName}.
+      smsTemplate: canonicalizeTemplate(t.smsTemplate),
+      sendWindowStart: t.sendWindowStart,
+      sendWindowEnd: t.sendWindowEnd,
+      ...(t.positionSummary ? { positionSummary: t.positionSummary, scoringRubric: null } : {}),
+      ...(t.recruiterName ? { recruiterName: t.recruiterName } : {}),
+      ...(t.recruiterEmail ? { recruiterEmail: t.recruiterEmail } : {}),
+      ...(t.calendarLink ? { calendarLink: t.calendarLink } : {}),
+      ...(t.targetRegion ? { targetRegion: t.targetRegion } : {}),
+      ...(t.minScoreToSend != null ? { minScoreToSend: t.minScoreToSend } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(campaigns.id, campaignId));
+  revalidatePath(`/campaigns/${campaignId}`);
+}
+
+export async function deleteCampaignTemplate(campaignId: string, formData: FormData): Promise<void> {
+  const templateId = str(formData, "templateId");
+  if (!templateId) return;
+  const tenant = await sessionTenant();
+  await db
+    .delete(campaignTemplates)
+    .where(and(eq(campaignTemplates.id, templateId), sql`coalesce(nullif(trim(${campaignTemplates.tenant}), ''), 'house') = ${tenant}`));
   revalidatePath(`/campaigns/${campaignId}`);
 }
 
@@ -378,7 +565,9 @@ export async function uploadContactsCsv(campaignId: string, formData: FormData):
   if (!(file instanceof File)) {
     throw new Error("No CSV file provided");
   }
-  const validate = formData.get("validateMobile") != null && isQStashConfigured();
+  // Validation no longer depends on QStash: the internal clock drains
+  // "validating" contacts too, so the checkbox alone decides.
+  const validate = formData.get("validateMobile") != null;
   const skipPrev = formData.get("skipPreviouslyTexted") != null;
   const text = await file.text();
   const result = parseCsv(text);
@@ -407,8 +596,12 @@ export async function uploadContactsCsv(campaignId: string, formData: FormData):
         })),
       )
       .onConflictDoNothing({ target: [contacts.campaignId, contacts.phone] });
-    if (validate) await enqueueValidationDrain(campaignId, 1);
-    if (isQStashConfigured()) await enqueueScoreDrain(campaignId, 3);
+    if (isQStashConfigured()) {
+      if (validate) await enqueueValidationDrain(campaignId, 1);
+      await enqueueScoreDrain(campaignId, 3);
+    } else {
+      kickSoon();
+    }
   }
 
   revalidatePath("/");
@@ -419,12 +612,12 @@ export async function uploadContactsCsv(campaignId: string, formData: FormData):
 
 /** Re-validate existing pending/failed contacts: mark them validating and kick off the drain. */
 export async function validateExistingContacts(campaignId: string): Promise<void> {
-  if (!isQStashConfigured()) return;
   await db
     .update(contacts)
     .set({ status: "validating" })
     .where(and(eq(contacts.campaignId, campaignId), inArray(contacts.status, ["pending", "failed"])));
-  await enqueueValidationDrain(campaignId, 1);
+  if (isQStashConfigured()) await enqueueValidationDrain(campaignId, 1);
+  else kickSoon();
   revalidatePath(`/campaigns/${campaignId}/contacts`);
   revalidatePath(`/campaigns/${campaignId}`);
 }
@@ -499,8 +692,15 @@ export async function deleteConversation(formData: FormData): Promise<void> {
 export async function sendCampaignBatch(campaignId: string): Promise<void> {
   const limit = Number(process.env.BATCH_SIZE ?? "10");
 
-  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId));
-  if (!campaign) throw new Error("Campaign not found");
+  const campaign = await assertTenantCampaign(campaignId);
+
+  // FAIL-SAFE: same rule as the automated drain: no human-set send date & time,
+  // no sending. startCampaignSend stamps "now" on an explicit Send click.
+  if (!campaign.scheduledAt || campaign.scheduledAt.getTime() > Date.now()) {
+    console.warn(`[sendCampaignBatch ${campaignId}] no send date & time due; refusing to send`);
+    revalidatePath(`/campaigns/${campaignId}`);
+    return;
+  }
 
   const window = isWithinSendWindow(campaign.sendWindowStart, campaign.sendWindowEnd);
   if (!window.ok) {
@@ -522,6 +722,8 @@ export async function sendCampaignBatch(campaignId: string): Promise<void> {
         eq(contacts.status, "pending"),
         eq(contacts.optedOut, false),
         isNull(contacts.deletedAt),
+        // No created-at cutoff (matches runSendBatch): a human-set schedule on
+        // this campaign is standing approval, late-pushed contacts included.
         minScore ? sql`${contacts.qualificationScore} >= ${minScore}` : undefined,
       ),
     )
@@ -531,56 +733,14 @@ export async function sendCampaignBatch(campaignId: string): Promise<void> {
   let failed = 0;
   let skipped = 0;
 
+  // Route every send through the shared processContactSend so the cross-campaign
+  // duplicate guard, atomic claim, template-render check, pacing, and suppression
+  // logging are identical to the automated drain — one send path, no drift.
   for (const contact of pending) {
-    // Atomically claim (pending->queued) so concurrent passes can't double-send.
-    const claimed = await db
-      .update(contacts)
-      .set({ status: "queued" })
-      .where(and(eq(contacts.id, contact.id), eq(contacts.status, "pending")))
-      .returning({ id: contacts.id });
-    if (claimed.length === 0) {
-      skipped++;
-      continue;
-    }
-
-    const body = renderTemplate(campaign.smsTemplate, contact);
-    const missing = findUnmergedTokens(campaign.smsTemplate, contact);
-    if (missing.length > 0) {
-      await db
-        .update(contacts)
-        .set({ status: "failed", lastError: `missing merge fields: ${missing.join(", ")}` })
-        .where(eq(contacts.id, contact.id));
-      skipped++;
-      continue;
-    }
-
-    await paceForNextSend();
-
-    const result = await sendSms({ to: contact.phone, body, from: campaign.fromNumber ?? undefined });
-
-    if (!result.ok) {
-      await db
-        .update(contacts)
-        .set({ status: "failed", lastError: result.error })
-        .where(eq(contacts.id, contact.id));
-      failed++;
-      continue;
-    }
-
-    const convo = await getOrCreateConversation(campaign.id, contact.id);
-    await db.insert(messages).values({
-      conversationId: convo.id,
-      direction: "outbound",
-      status: "sent",
-      body,
-      telnyxId: result.telnyxId,
-    });
-    await db.update(contacts).set({ status: "sent", lastError: null }).where(eq(contacts.id, contact.id));
-    await db
-      .update(conversations)
-      .set({ lastMessageAt: new Date() })
-      .where(eq(conversations.id, convo.id));
-    sent++;
+    const outcome = await processContactSend(campaign, contact);
+    if (outcome === "sent") sent++;
+    else if (outcome === "failed") failed++;
+    else skipped++;
   }
 
   await db.update(campaigns).set({ status: "active", updatedAt: new Date() }).where(eq(campaigns.id, campaignId));
@@ -594,8 +754,11 @@ export async function sendCampaignBatch(campaignId: string): Promise<void> {
 }
 
 export async function startCampaignSend(campaignId: string): Promise<void> {
-  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId));
-  if (!campaign) throw new Error("Campaign not found");
+  const campaign = await assertTenantCampaign(campaignId);
+
+  // Template gate before the schedule is stamped: an explicit Send click must
+  // not arm a campaign whose message resolves for nobody.
+  await assertTemplateCanSend(campaign);
 
   // Score-first guard: don't text anyone while fit-scoring is still running, so
   // unqualified prospects are never messaged before they've been evaluated.
@@ -616,14 +779,22 @@ export async function startCampaignSend(campaignId: string): Promise<void> {
     return;
   }
 
-  await db.update(campaigns).set({ status: "active", updatedAt: new Date() }).where(eq(campaigns.id, campaignId));
+  // An explicit Send click IS the human approval: stamp the send time as "now"
+  // so the fail-safe gate opens for everyone currently in the campaign. Contacts
+  // pushed in later still wait for the next explicit schedule/Send.
+  await db
+    .update(campaigns)
+    .set({ status: "active", scheduledAt: new Date(), updatedAt: new Date() })
+    .where(eq(campaigns.id, campaignId));
 
   if (isQStashConfigured()) {
     // Kick off a self-continuing drain that sends every pending contact, paced.
     await enqueueCampaignDrain(campaignId, 1);
   } else {
-    // No scheduler configured — fall back to one synchronous batch.
+    // No QStash: send one synchronous batch for instant feedback, then let the
+    // internal clock keep draining the rest on its own.
     await sendCampaignBatch(campaignId);
+    kickSoon();
     return;
   }
 
@@ -679,14 +850,42 @@ export async function recordInbound(args: {
     .innerJoin(campaigns, eq(campaigns.id, contacts.campaignId))
     .where(eq(contacts.phone, e164))
     .orderBy(desc(contacts.createdAt))
-    .limit(1);
+    .limit(25);
 
   if (matches.length === 0) {
     console.warn(`[recordInbound] No contact found for ${e164}`);
     return { matched: false };
   }
 
-  const { contact, campaign } = matches[0];
+  // Attribute the inbound to the campaign that actually texted this number
+  // (most recent outbound wins), not blindly to the newest contact row. The
+  // same phone often exists in several campaigns (combined lists), and the
+  // newest upload frequently is NOT the sender: the reply then landed in a
+  // campaign with zero outbounds, inflating its reply stats while the real
+  // thread never saw the answer. Fallback: newest contact row (cold inbound).
+  let picked = matches[0];
+  if (matches.length > 1) {
+    const outRows = await db
+      .select({
+        contactId: conversations.contactId,
+        lastOut: sql<string>`max(${messages.createdAt})`,
+      })
+      .from(conversations)
+      .innerJoin(messages, and(eq(messages.conversationId, conversations.id), eq(messages.direction, "outbound")))
+      .where(inArray(conversations.contactId, matches.map((m) => m.contact.id)))
+      .groupBy(conversations.contactId);
+    const lastOutByContact = new Map(outRows.map((r) => [r.contactId, new Date(r.lastOut).getTime()]));
+    let bestOut = 0;
+    for (const m of matches) {
+      const t = lastOutByContact.get(m.contact.id) ?? 0;
+      if (t > bestOut) {
+        bestOut = t;
+        picked = m;
+      }
+    }
+  }
+
+  const { contact, campaign } = picked;
   const convo = await getOrCreateConversation(campaign.id, contact.id);
 
   if (isStopKeyword(args.body)) {
@@ -700,17 +899,11 @@ export async function recordInbound(args: {
         telnyxId: args.telnyxId ?? null,
         classification: "stop",
       });
-    // Permanent global do-not-text: opt out EVERY contact row with this number
-    // (across all campaigns), so no current or future campaign can message it.
-    await db
-      .update(contacts)
-      .set({ optedOut: true, status: "opted_out" })
-      .where(eq(contacts.phone, e164));
-    // Record on the suppression list too, so future CSV uploads skip it on sight.
-    await db
-      .insert(suppressedNumbers)
-      .values({ campaignId: campaign.id, phone: e164, reason: "opted_out" })
-      .onConflictDoNothing({ target: [suppressedNumbers.campaignId, suppressedNumbers.phone] });
+    // Permanent global do-not-text: opts out every contact row with this
+    // number and upserts the suppression ledger to reason 'opted_out' (the
+    // sender's earlier 'sent' row would otherwise swallow the insert and the
+    // opt-out would never be recorded).
+    await recordOptOut({ campaignId: campaign.id, phone: e164 });
     await db
       .update(conversations)
       .set({
@@ -749,6 +942,18 @@ export async function recordInbound(args: {
       unreadCount: sql`${conversations.unreadCount}::int + 1` as unknown as string,
     })
     .where(eq(conversations.id, convo.id));
+
+  // Text the recruiter's cell right away (and re-nag on the clock until they
+  // respond to this candidate from the inbox). Best-effort.
+  await recordReplyAlert({
+    campaign,
+    contact,
+    conversationId: convo.id,
+    inboundBody: args.body,
+    inboundAt: inserted.createdAt,
+  }).catch((err) => {
+    console.error("[recordInbound] reply alert failed:", err);
+  });
 
   // If the candidate replied with an email address, auto-send the full position
   // details (subject = role title, body = position summary) from the configured
@@ -932,8 +1137,10 @@ async function classifyInboundSilent(args: {
   // "needs attention" (set on inbound) until Ryan opens it.
   const bucket = sentimentOf(classification.label);
   if (classification.label === "stop") {
-    await db.update(contacts).set({ optedOut: true, status: "opted_out" }).where(eq(contacts.id, args.contact.id));
-    await db.update(conversations).set({ status: "opted_out" }).where(eq(conversations.id, args.conversationId));
+    // Same permanent opt-out as the STOP keyword path: all contact rows for
+    // the number, plus the suppression-ledger upsert (this path used to skip
+    // the ledger entirely, so AI-detected stops never counted as opt-outs).
+    await recordOptOut({ campaignId: args.campaign.id, phone: args.contact.phone, conversationId: args.conversationId });
   } else if (bucket === "negative") {
     await db.update(conversations).set({ status: "closed" }).where(eq(conversations.id, args.conversationId));
   } else if (!args.contact.optedOut) {
@@ -1023,13 +1230,15 @@ async function classifyInboundSilent(args: {
           to: args.contact.phone,
           body: draft,
           from: args.campaign.fromNumber ?? undefined,
+          creds: telnyxCredsForTenant(args.campaign.tenant),
         });
         if (send.ok) {
           await db.insert(messages).values({
             conversationId: args.conversationId,
             direction: "outbound",
             status: "sent",
-            body: draft,
+            // Store the delivered text (footer included), not the raw draft.
+            body: send.text,
             telnyxId: send.telnyxId,
           });
           // Keep the thread flagged for the recruiter even after the AI replies —
@@ -1106,6 +1315,7 @@ export async function sendManualReply(
     to: contact.phone,
     body,
     from: campaign?.fromNumber ?? undefined,
+    creds: telnyxCredsForTenant(campaign?.tenant),
   });
 
   if (!result.ok) {
@@ -1116,7 +1326,8 @@ export async function sendManualReply(
     conversationId,
     direction: "outbound",
     status: "sent",
-    body,
+    // Store the delivered text (footer included), not what was typed.
+    body: result.text,
     telnyxId: result.telnyxId,
   });
   await db
@@ -1168,10 +1379,10 @@ export async function deleteTodo(id: string) {
 
 /** Kick off background fit-scoring for every unscored contact in a campaign. */
 export async function scoreCampaignContacts(campaignId: string): Promise<void> {
-  if (!isQStashConfigured()) return;
   // Clear any prior "scoring paused" flag so the UI reflects a fresh attempt.
   await db.update(campaigns).set({ scoringError: null }).where(eq(campaigns.id, campaignId));
-  await enqueueScoreDrain(campaignId, 1);
+  if (isQStashConfigured()) await enqueueScoreDrain(campaignId, 1);
+  else kickSoon();
   revalidatePath(`/campaigns/${campaignId}/contacts`);
   revalidatePath(`/campaigns/${campaignId}`);
 }

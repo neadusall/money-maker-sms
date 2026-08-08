@@ -1,10 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { eq, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { db } from "@/db/client";
-import { campaigns } from "@/db/schema";
+import { tenantCampaign } from "@/lib/tenant";
 import { restoreContact } from "@/lib/actions";
 import { formatPhone } from "@/lib/phone";
+import { CallButton } from "@/components/CallButton";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +33,7 @@ export default async function ArchivedPage({
   const { q: qRaw } = await searchParams;
   const q = (qRaw ?? "").trim();
 
-  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, id));
+  const campaign = await tenantCampaign(id);
   if (!campaign) notFound();
 
   const qLike = q ? "%" + q.toLowerCase().replace(/[\\%_]/g, (m) => "\\" + m) + "%" : null;
@@ -71,7 +72,7 @@ export default async function ArchivedPage({
         </Link>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight">Archived</h1>
         <p className="mt-1 text-sm text-zinc-600">
-          Deleted threads whose candidates replied — recoverable. Search by name or phone (10-digit).
+          Deleted threads whose candidates replied: recoverable. Search by name or phone (10-digit).
         </p>
       </div>
 
@@ -81,15 +82,15 @@ export default async function ArchivedPage({
           name="q"
           defaultValue={q}
           placeholder="Search name or 10-digit phone…"
-          className="flex-1 rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500"
+          className="flex-1 rounded-md border border-zinc-300 bg-surface px-3 py-2 text-sm focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500"
         />
-        <button className="rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800">
+        <button className="rounded-md bg-ink px-3 py-2 text-sm font-medium text-white hover:bg-ink-soft">
           Search
         </button>
         {q ? (
           <Link
             href={`/campaigns/${id}/archived`}
-            className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
+            className="rounded-md border border-zinc-300 bg-surface px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
           >
             Clear
           </Link>
@@ -101,7 +102,7 @@ export default async function ArchivedPage({
       </div>
 
       {rows.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-zinc-300 bg-white p-12 text-center text-sm text-zinc-500">
+        <div className="rounded-2xl border border-dashed border-zinc-300 bg-surface p-12 text-center text-sm text-zinc-500">
           {q ? "No matches." : "Nothing archived yet. Deletes from the inbox or To-dos will land here."}
         </div>
       ) : (
@@ -111,7 +112,7 @@ export default async function ArchivedPage({
             const sub = [r.job_title, r.company].filter(Boolean).join(" · ");
             const restore = restoreContact.bind(null, id, r.ct_id);
             return (
-              <li key={r.ct_id} className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
+              <li key={r.ct_id} className="rounded-xl border border-zinc-200 bg-surface p-4 shadow-sm">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
@@ -135,14 +136,15 @@ export default async function ArchivedPage({
                     </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
+                    <CallButton phone={r.phone} name={name} company={r.company} variant="pill" />
                     <Link
                       href={`/campaigns/${id}/inbox/${r.convo_id}`}
-                      className="rounded-lg border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+                      className="rounded-lg border border-zinc-300 bg-surface px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
                     >
                       View thread →
                     </Link>
                     <form action={restore}>
-                      <button className="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700">
+                      <button className="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-[#047857]">
                         Restore
                       </button>
                     </form>

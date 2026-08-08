@@ -10,7 +10,7 @@ export default async function LoginPage({
 
   return (
     <div className="mx-auto flex min-h-[70vh] max-w-md flex-col justify-center">
-      <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm">
+      <div className="rounded-2xl border border-zinc-200 bg-surface p-8 shadow-sm">
         <div className="flex justify-center">
           <Logo />
         </div>
@@ -41,11 +41,11 @@ export default async function LoginPage({
             required
             autoFocus
             placeholder="you@example.com"
-            className="rounded-lg border border-zinc-300 px-3.5 py-2.5 text-sm shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+            className="rounded-lg border border-zinc-300 px-3.5 py-2.5 text-sm shadow-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
           />
           <button
             type="submit"
-            className="rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:from-emerald-600 hover:to-teal-700"
+            className="rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand/90"
           >
             Email me a sign-in link
           </button>
