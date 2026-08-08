@@ -4,7 +4,6 @@ import { randomBytes } from "crypto";
 import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { users, sessions } from "@/db/schema";
-import { SESSION_COOKIE } from "@/lib/auth";
 import { adoptLegacyTenantRows, normalizeTenant } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
@@ -79,20 +78,16 @@ export async function GET(req: Request) {
   const expires = new Date(Date.now() + ONE_YEAR_MS);
   await db.insert(sessions).values({ sessionToken, userId: user.id, expires });
 
-  // Use the shared cookie config so this matches what Auth.js reads/writes.
-  // SameSite=None; Secure is what lets OS Text load inside the portal iframe on
-  // cross-site domains (app.lumesp.com and white-label custom domains).
-  //
-  // Deliberately NOT the local name/secure pair this route used to compute for
-  // itself: lib/auth.ts builds the Auth.js cookie config from this same
-  // SESSION_COOKIE, and the two must agree. A session rotation on the updateAge
-  // boundary rewrites the cookie through Auth.js, so any drift here would
-  // silently downgrade a live session and break the embed hours after sign-in.
+  // Served same-origin under the portal's domain (basePath /ostext-app), so
+  // the iframe embed is first-party everywhere and Lax is right on any host.
+  const proto = req.headers.get("x-forwarded-proto") ?? "";
+  const secure = proto === "https" || (process.env.AUTH_URL ?? "").startsWith("https");
+  const cookieName = secure ? "__Secure-authjs.session-token" : "authjs.session-token";
   const jar = await cookies();
-  jar.set(SESSION_COOKIE.name, sessionToken, {
+  jar.set(cookieName, sessionToken, {
     httpOnly: true,
-    secure: SESSION_COOKIE.secure,
-    sameSite: SESSION_COOKIE.sameSite,
+    secure,
+    sameSite: "lax",
     path: "/",
     expires,
   });

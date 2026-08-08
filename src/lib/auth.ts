@@ -12,42 +12,12 @@ function allowedEmails(): Set<string> {
   );
 }
 
-// OS Text is embedded in an iframe inside the RecruitersOS portal. On
-// recruitersos.co that iframe is same-site with taltxt.recruitersos.co, so a
-// SameSite=Lax cookie works. But the portal is also served on OTHER registrable
-// domains (app.lumesp.com and every white-label custom domain), where the
-// iframe is CROSS-site — a Lax cookie is dropped and the user sees a login
-// screen inside the frame. SameSite=None; Secure lets the session cookie ride
-// in a cross-site iframe from any portal domain. Only valid over HTTPS, so we
-// fall back to Lax in local http dev.
-const useSecureCookies = (process.env.AUTH_URL ?? "").startsWith("https");
-export const SESSION_COOKIE = {
-  name: useSecureCookies ? "__Secure-authjs.session-token" : "authjs.session-token",
-  secure: useSecureCookies,
-  sameSite: (useSecureCookies ? "none" : "lax") as "none" | "lax",
-};
-
 export const { handlers, signIn, signOut, auth } = NextAuth({
   adapter: DrizzleAdapter(db),
   trustHost: true,
   // Long-lived database sessions so the instant-access link (and normal logins)
   // keep you signed in for a year without re-authenticating.
   session: { strategy: "database", maxAge: 60 * 60 * 24 * 365, updateAge: 60 * 60 * 24 },
-  // Keep Auth.js in lock-step with the instant-access link (/api/enter): both
-  // must write the SAME cookie name + SameSite, or a session-rotation on the
-  // updateAge boundary would silently downgrade it back to Lax and re-break the
-  // cross-site iframe embed.
-  cookies: {
-    sessionToken: {
-      name: SESSION_COOKIE.name,
-      options: {
-        httpOnly: true,
-        sameSite: SESSION_COOKIE.sameSite,
-        path: "/",
-        secure: SESSION_COOKIE.secure,
-      },
-    },
-  },
   providers: [
     Nodemailer({
       server: {

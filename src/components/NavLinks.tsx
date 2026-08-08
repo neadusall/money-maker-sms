@@ -8,8 +8,7 @@ export function NavLinks({ todoCount = 0 }: { todoCount?: number }) {
   const onNew = pathname.startsWith("/campaigns/new");
   const onTodos = pathname.startsWith("/todos");
   const onSpend = pathname.startsWith("/spend");
-  const onHealth = pathname.startsWith("/health");
-  const onCampaigns = !onNew && !onTodos && !onSpend && !onHealth;
+  const onCampaigns = !onNew && !onTodos && !onSpend;
 
   return (
     <div className="flex items-center gap-1 rounded-xl bg-zinc-100 p-1">
@@ -32,12 +31,6 @@ export function NavLinks({ todoCount = 0 }: { todoCount?: number }) {
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v12m-3-2.818.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
         </svg>
         Spend
-      </Link>
-      <Link href="/health" className={pill(onHealth)}>
-        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 12h3.75l1.5 6 4.5-13.5 1.5 7.5h5.25" />
-        </svg>
-        Status
       </Link>
       <Link href="/campaigns/new" className={pill(onNew)}>
         <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
