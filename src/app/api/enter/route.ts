@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { randomBytes } from "crypto";
 import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
+import { buildId } from "@/lib/build-id";
 import { users, sessions } from "@/db/schema";
 import { adoptLegacyTenantRows, normalizeTenant } from "@/lib/tenant";
 
@@ -103,5 +104,12 @@ export async function GET(req: Request) {
   const accent = url.searchParams.get("accent");
   if (theme === "dark" || theme === "light") dest.searchParams.set("theme", theme);
   if (accent && /^#[0-9a-fA-F]{3,8}$/.test(accent)) dest.searchParams.set("accent", accent);
+  // Cache-buster, one value per deploy: a browser that long ago cached the
+  // landing document (from a build that still allowed caching) would otherwise
+  // serve that stale copy on EVERY entry, because this redirect always landed
+  // on the identical URL. Burned live on 2026-08-17: an iframe kept booting a
+  // months-old UI with fresh data for days across "hard" refreshes. A per-build
+  // URL makes any such copy unreachable the moment a new build ships.
+  dest.searchParams.set("v", buildId());
   return new NextResponse(null, { status: 302, headers: { Location: dest.pathname + dest.search } });
 }
