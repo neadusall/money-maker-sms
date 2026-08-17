@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { auth } from "@/lib/auth";
+import { buildId } from "@/lib/build-id";
+import { BuildWatch } from "@/components/BuildWatch";
 import { Logo } from "@/components/Logo";
 import { NavLinks } from "@/components/NavLinks";
 import { openTodoCount } from "@/lib/todos";
@@ -33,6 +35,7 @@ export default async function RootLayout({
   return (
     <html
       lang="en"
+      data-build={buildId()}
       className={`${interSans.variable} ${jetbrainsMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
@@ -72,6 +75,7 @@ if(window.self!==window.top){document.documentElement.classList.add("embedded");
           </div>
         </header>
         <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">{children}</main>
+        <BuildWatch />
       </body>
     </html>
   );
