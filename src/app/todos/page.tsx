@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "@/db/client";
-import { todos, contacts, campaigns, type TodoChannel } from "@/db/schema";
+import { todos, contacts, campaigns, conversations, type TodoChannel } from "@/db/schema";
 import { completeTodo, reopenTodo, deleteTodo, toggleCandidateReviewed } from "@/lib/actions";
 import { CallButton } from "@/components/CallButton";
 import { DeleteCorrespondenceButton } from "@/components/DeleteCorrespondenceButton";
@@ -53,6 +53,7 @@ export default async function TodosPage({
       createdAt: todos.createdAt,
       campaignId: todos.campaignId,
       conversationId: todos.conversationId,
+      threadId: conversations.id,
       contactId: todos.contactId,
       firstName: contacts.firstName,
       lastName: contacts.lastName,
@@ -72,6 +73,13 @@ export default async function TodosPage({
     .from(todos)
     .innerJoin(contacts, eq(contacts.id, todos.contactId))
     .innerJoin(campaigns, eq(campaigns.id, todos.campaignId))
+    // Not every to-do is born from a conversation (e.g. list-review tasks), but
+    // the candidate usually still has one; (campaign, contact) is unique on
+    // conversations, so this join can never fan rows out.
+    .leftJoin(
+      conversations,
+      and(eq(conversations.campaignId, todos.campaignId), eq(conversations.contactId, todos.contactId)),
+    )
     .where(
       and(
         isNull(contacts.deletedAt),
@@ -126,7 +134,7 @@ export default async function TodosPage({
         phone: r.phone,
         company: r.company,
         campaignId: r.campaignId,
-        conversationId: r.conversationId,
+        conversationId: r.conversationId ?? r.threadId,
         linkedin: li.url,
         linkedinDirect: li.direct,
         connectNote,
@@ -138,6 +146,7 @@ export default async function TodosPage({
         items: [] as typeof rows,
       };
     g.items.push(r);
+    if (!g.conversationId) g.conversationId = r.conversationId ?? r.threadId;
     groups.set(r.contactId, g);
   }
   // Stable order — everyone stays on the board. The read checkmark only marks
@@ -279,7 +288,10 @@ export default async function TodosPage({
                     </p>
                   </div>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
+                {/* flex-wrap (not shrink-0): six actions live here now, so on a
+                    narrow window the row folds inside the card instead of
+                    pushing past its right edge. */}
+                <div className="flex flex-wrap items-center justify-end gap-2">
                   <CallButton phone={g.phone} name={g.name} company={g.company} variant="pill" />
                   <a
                     href={g.linkedin}
@@ -297,9 +309,13 @@ export default async function TodosPage({
                   {g.conversationId ? (
                     <Link
                       href={`/campaigns/${g.campaignId}/inbox/${g.conversationId}`}
-                      className="rounded-lg border border-zinc-300 bg-surface px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+                      title="Open the SMS thread with this candidate"
+                      className="inline-flex items-center gap-1 rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700 hover:bg-sky-100"
                     >
-                      Open thread →
+                      <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M8.625 12a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm3.75 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm3.75 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0ZM21 12c0 4.556-4.03 8.25-9 8.25a9.76 9.76 0 0 1-2.555-.337A5.972 5.972 0 0 1 5.41 20.97a5.969 5.969 0 0 1-.474-.065 4.48 4.48 0 0 0 .978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25Z" />
+                      </svg>
+                      SMS thread
                     </Link>
                   ) : null}
                   <DeleteCorrespondenceButton contactId={g.contactId} name={g.name} />
