@@ -19,7 +19,10 @@ export function BuildWatch() {
         const r = await fetch("/ostext-app/api/build", { cache: "no-store" });
         if (!r.ok) return;
         const live = (await r.text()).trim();
-        if (!live || live === "dev" || live === mine) return;
+        // A signed-out tab gets the login PAGE here (auth middleware redirect),
+        // not a build id; only trust something shaped like an id.
+        if (!/^[A-Za-z0-9_-]{5,40}$/.test(live)) return;
+        if (live === "dev" || live === mine) return;
         // Loop guard: if a reload somehow still yields a mismatched build
         // (an upstream cache pinning old HTML), stop after 2 tries per hour
         // rather than reloading forever.
