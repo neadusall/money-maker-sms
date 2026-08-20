@@ -11,6 +11,8 @@ import { scoreCandidatesBatch } from "./qualify";
 import { ensureRubric } from "./rubric";
 import { regionForLocation } from "./region";
 import { paceForNextSend } from "./pacing";
+import { capState, jitterDelayMs } from "./daily-cap";
+import { replyOnThreadLane } from "./lane";
 
 /**
  * The three drain passes, one batch per call: number validation, fit scoring,
@@ -257,6 +259,10 @@ export type SendBatchResult =
   | { state: "waiting_schedule"; waitSeconds: number }
   | { state: "waiting_window"; waitSeconds: number }
   | { state: "waiting_scores"; unscored: number }
+  // Today's allowance is fully spent for the moment: the campaign is capped and the
+  // elapsed part of its send window has not earned another release yet. NOT an error and
+  // not a stall - the next sweep will release more.
+  | { state: "capped"; sentToday: number; allowance: number; remaining: number }
   | { state: "ran"; sent: number; failed: number; skipped: number; remaining: number };
 
 const clampWait = (ms: number) => Math.min(6 * 3600, Math.max(60, Math.ceil(ms / 1000)));
@@ -325,13 +331,31 @@ export async function runSendBatch(campaignId: string, limit = SEND_BATCH): Prom
     minScore ? sql`${contacts.qualificationScore} >= ${minScore}` : undefined,
   );
 
-  const pending = await db.select().from(contacts).where(sendable).limit(limit);
+  // DAY-SPREADING: a campaign with a dailyCap only releases the share of today's allowance
+  // that the elapsed portion of its send window has earned. 200/day over a 9-hour window
+  // means roughly one every 2.7 minutes rather than 200 in the first ten. Uncapped
+  // campaigns get `capped: false` and behave exactly as they did before this existed.
+  const cap = await capState(campaign);
+  if (cap.capped && cap.releasable <= 0) {
+    const [{ remaining: held }] = await db
+      .select({ remaining: sql<number>`count(*)::int` })
+      .from(contacts)
+      .where(sendable);
+    return { state: "capped", sentToday: cap.sentToday, allowance: cap.allowance, remaining: held };
+  }
+  const batchLimit = cap.capped ? Math.min(limit, cap.releasable) : limit;
+
+  const pending = await db.select().from(contacts).where(sendable).limit(batchLimit);
 
   let sent = 0;
   let failed = 0;
   let skipped = 0;
   for (const contact of pending) {
     try {
+      // Irregular spacing on top of the even release. A perfectly periodic send interval is
+      // itself a machine signature; this breaks the metronome without eating the day.
+      const jitter = jitterDelayMs(cap, campaign);
+      if (jitter > 0) await new Promise((r) => setTimeout(r, jitter));
       const outcome = await processContactSend(campaign, contact);
       if (outcome === "sent") sent++;
       else if (outcome === "failed") failed++;
@@ -421,11 +445,15 @@ export async function dispatchScheduledMessage(scheduledMessageId: string): Prom
   }
 
   await paceForNextSend();
-  const result = await sendSms({
+  // Same continuity rule as the portal reply box: answer on the wire the thread is already
+  // on. An auto-reply that arrives green in a blue conversation is the most bot-looking
+  // thing this system could do, and unlike a human reply nobody is watching when it happens.
+  const result = await replyOnThreadLane({
+    conversationId: scheduled.conversationId,
     to: contact.phone,
     body: scheduled.body,
     from: campaign?.fromNumber ?? undefined,
-    creds: telnyxCredsForTenant(campaign?.tenant),
+    telnyxCreds: telnyxCredsForTenant(campaign?.tenant),
   });
 
   if (!result.ok) {
@@ -439,10 +467,13 @@ export async function dispatchScheduledMessage(scheduledMessageId: string): Prom
   await db.insert(messages).values({
     conversationId: scheduled.conversationId,
     direction: "outbound",
-    status: "sent",
+    status: result.uncertain ? "uncertain" : "sent",
     // Store the delivered text (footer included), not the queued draft.
     body: result.text,
-    telnyxId: result.telnyxId,
+    provider: result.lane,
+    ...(result.lane === "imessage"
+      ? { blueBubblesGuid: result.providerId }
+      : { telnyxId: result.providerId }),
   });
   // Do NOT clear the conversation flag when the AI auto-replies. The recruiter
   // must personally lay eyes on every thread before it leaves "Needs attention";

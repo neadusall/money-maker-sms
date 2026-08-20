@@ -4,6 +4,8 @@ import { contacts, conversations, messages, suppressedNumbers, type Campaign, ty
 import { renderTemplate, findUnmergedTokens } from "./merge";
 import { sendSms } from "./telnyx";
 import { telnyxCredsForTenant } from "./tenant-telnyx";
+import { resolveLane, sendOnBridge } from "./lane";
+import { expandSpintax } from "./spintax";
 import { paceForNextSend } from "./pacing";
 import { isAlwaysAllowed } from "./always-allow";
 
@@ -112,8 +114,16 @@ export async function processContactSend(
     .returning({ id: contacts.id });
   if (claimed.length === 0) return "skipped";
 
-  const body = renderTemplate(campaign.smsTemplate, contact);
-  const missing = findUnmergedTokens(campaign.smsTemplate, contact);
+  // SPINTAX FIRST, merge fields second. `expandSpintax` protects `{{token}}` during
+  // expansion, so a merge field can live inside a spin branch; running the merge first
+  // would instead let a candidate's company name containing a brace corrupt the spin parse.
+  // The seed is the contact id: the same person always renders the same wording, so a
+  // retry after a network blip cannot deliver a second, differently-worded copy.
+  const spun = expandSpintax(campaign.smsTemplate, contact.id);
+  const body = renderTemplate(spun, contact);
+  // Check the SPUN template, not the raw one: a token that only appears in an unchosen
+  // branch is not actually missing from this recipient's message.
+  const missing = findUnmergedTokens(spun, contact);
   if (missing.length > 0) {
     await db
       .update(contacts)
@@ -122,18 +132,65 @@ export async function processContactSend(
     return "skipped";
   }
 
-  await paceForNextSend();
-  const result = await sendSms({
-    to: contact.phone,
-    body,
-    from: campaign.fromNumber ?? undefined,
-    creds: telnyxCredsForTenant(campaign.tenant),
-  });
-
-  if (!result.ok) {
+  // Which lane carries this one. `resolveLane` is the ONLY place that knows both providers
+  // exist; everything below just does what it says.
+  const decision = await resolveLane(campaign, contact);
+  if (decision.lane === "hold") {
+    // Release the claim so a later sweep retries. Deliberately NOT "failed": the contact is
+    // fine, our bridge or its config is not, and burning a candidate over that is
+    // unacceptable. A sleeping Mac must cost us a delay, never a lead.
     await db
       .update(contacts)
-      .set({ status: "failed", lastError: result.error })
+      .set({ status: "pending", lastError: `Holding: ${decision.reason}` })
+      .where(eq(contacts.id, contact.id));
+    return "skipped";
+  }
+
+  await paceForNextSend();
+
+  // Both lanes are normalized to the same shape here so everything below is lane-agnostic.
+  let outcome:
+    | { ok: true; lane: "telnyx" | "imessage"; providerId: string; text: string; uncertain: boolean }
+    | { ok: false; error: string };
+
+  if (decision.lane === "imessage") {
+    const r = await sendOnBridge({ to: contact.phone, body });
+    if (r.ok) {
+      outcome = { ok: true, lane: "imessage", providerId: r.guid, text: r.text, uncertain: r.uncertain };
+    } else if (r.definite && campaign.channel === "auto") {
+      // The bridge is CERTAIN nothing was delivered, and this campaign allows the green
+      // lane, so the same call falls through to Telnyx rather than costing us the contact.
+      // Only ever on a definite failure: an ambiguous one returns ok+uncertain above and
+      // never reaches here, which is what stops a candidate being texted twice.
+      console.warn(`[imessage] definite send failure (${r.error}); falling back to Telnyx`);
+      const t = await sendSms({
+        to: contact.phone,
+        body,
+        from: campaign.fromNumber ?? undefined,
+        creds: telnyxCredsForTenant(campaign.tenant),
+      });
+      outcome = t.ok
+        ? { ok: true, lane: "telnyx", providerId: t.telnyxId, text: t.text, uncertain: false }
+        : { ok: false, error: t.error };
+    } else {
+      outcome = { ok: false, error: r.error };
+    }
+  } else {
+    const t = await sendSms({
+      to: contact.phone,
+      body,
+      from: campaign.fromNumber ?? undefined,
+      creds: telnyxCredsForTenant(campaign.tenant),
+    });
+    outcome = t.ok
+      ? { ok: true, lane: "telnyx", providerId: t.telnyxId, text: t.text, uncertain: false }
+      : { ok: false, error: t.error };
+  }
+
+  if (!outcome.ok) {
+    await db
+      .update(contacts)
+      .set({ status: "failed", lastError: outcome.error })
       .where(eq(contacts.id, contact.id));
     return "failed";
   }
@@ -142,12 +199,17 @@ export async function processContactSend(
   await db.insert(messages).values({
     conversationId: convo.id,
     direction: "outbound",
-    status: "sent",
-    // What Telnyx actually delivered, opt-out footer included - not the
+    // 'uncertain' means the bridge timed out after Messages.app may already have sent.
+    // The reconcile sweep settles it; nothing resends in the meantime.
+    status: outcome.uncertain ? "uncertain" : "sent",
+    // What the provider actually delivered, opt-out footer included - not the
     // pre-footer render. The thread and any compliance export then show the
     // recipient's real message.
-    body: result.text,
-    telnyxId: result.telnyxId,
+    body: outcome.text,
+    provider: outcome.lane,
+    ...(outcome.lane === "imessage"
+      ? { blueBubblesGuid: outcome.providerId }
+      : { telnyxId: outcome.providerId }),
   });
   await db.update(contacts).set({ status: "sent", lastError: null }).where(eq(contacts.id, contact.id));
   await db.update(conversations).set({ lastMessageAt: new Date() }).where(eq(conversations.id, convo.id));

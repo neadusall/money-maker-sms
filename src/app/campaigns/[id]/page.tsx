@@ -21,7 +21,12 @@ import { LiveBadge } from "@/components/LiveBadge";
 import { KpiCard, Funnel, SentimentMeter, MiniStat, pct } from "@/components/Stats";
 import { sentimentOf } from "@/lib/sentiment";
 import { campaignFunnels, EMPTY_FUNNEL } from "@/lib/campaign-stats";
+import { laneComparison } from "@/lib/lane-stats";
+import { LaneComparison } from "@/components/LaneComparison";
+import { SendPacing } from "@/components/SendPacing";
+import { capState, sentTodayByLane } from "@/lib/daily-cap";
 import { auditTemplate, describeAudit } from "@/lib/merge";
+import { checkSpin } from "@/lib/spintax";
 
 export const dynamic = "force-dynamic";
 
@@ -57,6 +62,15 @@ export default async function CampaignDetail({
   // versions of these numbers lie.
   const funnel = (await campaignFunnels(id)).get(id) ?? EMPTY_FUNNEL;
   const convoStats = { needsAttention: funnel.needsAttention, replied: funnel.replied };
+
+  // Lane split (blue vs green) and today's pacing, both scoped to this campaign. Run
+  // together with everything else on the page - three independent reads, no reason to
+  // serialize them behind each other.
+  const [lanes, pacing, todayByLane] = await Promise.all([
+    laneComparison(30, id),
+    capState(campaign),
+    sentTodayByLane(id),
+  ]);
 
   // Reply-sentiment breakdown from the AI classifications on replied threads.
   const classRows = await db
@@ -97,6 +111,11 @@ export default async function CampaignDetail({
     .limit(500);
   const templateAudit = sendable.length ? auditTemplate(campaign.smsTemplate, sendable) : null;
   const templateProblem = templateAudit ? describeAudit(templateAudit) : null;
+
+  // Content-diversity check. Only meaningful once a daily cap is set: without one there is
+  // no volume to size the template against, and warning on every low-volume campaign would
+  // train recruiters to ignore the banner.
+  const spin = campaign.dailyCap ? checkSpin(campaign.smsTemplate, campaign.dailyCap) : null;
 
   const send = startCampaignSend.bind(null, id);
   const update = updateCampaign.bind(null, id);
@@ -354,6 +373,36 @@ export default async function CampaignDetail({
         </div>
       ) : null}
 
+      {spin?.malformed ? (
+        <div className="flex items-start gap-2 rounded-xl border border-rose-300 bg-rose-50 p-4 text-sm text-rose-900">
+          <svg className="mt-0.5 h-4 w-4 shrink-0 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+          </svg>
+          <span>
+            <strong>Unbalanced braces in the message.</strong> A missing {"{"} or {"}"} ships literal
+            braces to a candidate&rsquo;s phone. Fix the spin groups before sending.
+          </span>
+        </div>
+      ) : null}
+
+      {spin && !spin.malformed && !spin.ok ? (
+        <div className="flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          <svg className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+          </svg>
+          <span>
+            <strong>
+              This message has {spin.variants === 1 ? "no wording variety" : `only ${spin.variants.toLocaleString()} versions`} for{" "}
+              {campaign.dailyCap} sends a day.
+            </strong>{" "}
+            Carriers filter on repeated message bodies, so near-identical texts at this volume
+            get the number blocked. Add spin groups like{" "}
+            <code className="rounded bg-amber-100 px-1">{"{Hi|Hey}"}</code> until there are at
+            least {spin.required.toLocaleString()} versions.
+          </span>
+        </div>
+      ) : null}
+
       {unscored > 0 && campaign.scoringError === "no_key" ? (
         <div className="flex items-start gap-2 rounded-xl border border-rose-300 bg-rose-50 p-4 text-sm text-rose-900">
           <svg className="mt-0.5 h-4 w-4 shrink-0 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
@@ -519,6 +568,19 @@ export default async function CampaignDetail({
           ]}
         />
         <SentimentMeter positive={positive} neutral={neutral} negative={negative} />
+      </div>
+
+      {/* Lane split + day-spreading. Both are scoped to THIS campaign so a recruiter can see
+          whether the blue line is earning its keep on the role in front of them, not just in
+          aggregate across the workspace. */}
+      <div className="grid gap-3 lg:grid-cols-2">
+        <LaneComparison data={lanes} />
+        <SendPacing
+          cap={pacing}
+          windowStart={campaign.sendWindowStart}
+          windowEnd={campaign.sendWindowEnd}
+          byLane={todayByLane}
+        />
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">

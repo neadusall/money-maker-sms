@@ -32,7 +32,7 @@ export default async function HealthPage() {
   if (!session?.user) redirect("/login");
 
   const report = await getHealthReport();
-  const { telnyx, sms, recruiters } = report;
+  const { telnyx, imessage, sms, recruiters } = report;
   const b = BANNER[report.status];
 
   return (
@@ -70,6 +70,62 @@ export default async function HealthPage() {
 
       {/* Two-way SMS self-test */}
       <SelfTestCard senders={report.senders} />
+
+      {/* iMessage bridge (our own Mac) */}
+      <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+        <div className="flex items-baseline justify-between">
+          <h3 className="text-sm font-semibold text-zinc-700">iMessage bridge</h3>
+          <span className="text-[10px] uppercase tracking-wide text-zinc-400">our Mac, no third party</span>
+        </div>
+
+        {!imessage.configured ? (
+          <p className="mt-3 text-sm text-zinc-500">
+            The iMessage lane is off. Campaigns set to <code className="rounded bg-zinc-100 px-1">auto</code> send
+            on SMS and <code className="rounded bg-zinc-100 px-1">iMessage only</code> campaigns hold their
+            contacts rather than sending green. Set BLUEBUBBLES_URL, BLUEBUBBLES_PASSWORD and
+            OSTEXT_IMESSAGE_TENANT to turn it on.
+          </p>
+        ) : (
+          <div className="mt-3 divide-y divide-zinc-100">
+            <Check
+              ok={imessage.reachable}
+              label="Mac reachable"
+              detail={
+                imessage.reachable
+                  ? "BlueBubbles answered just now"
+                  : (imessage.error ?? "not answering - the Mac may be asleep or off the tunnel")
+              }
+            />
+            <Check
+              ok={imessage.laneHealthy}
+              label="Apple line behavior"
+              detail={imessage.laneNote}
+            />
+            <Check
+              ok={imessage.uncertain === 0}
+              label="Unconfirmed sends"
+              detail={
+                imessage.uncertain === 0
+                  ? "none pending"
+                  : `${imessage.uncertain} awaiting reconcile - NOT resent, on purpose (double-text guard)`
+              }
+              warnOnly
+            />
+            <div className="flex items-center gap-3 py-2">
+              <span className="h-5 w-5 shrink-0" />
+              <span className="w-52 shrink-0 font-medium text-zinc-800">Last 24 hours</span>
+              <span className="text-sm text-zinc-500">
+                {imessage.sent24h} sent on the blue lane
+                {imessage.sent24h > 0
+                  ? ` · ${imessage.replyRatePct}% reply rate · ${imessage.failureRatePct}% failed`
+                  : ""}
+                {" · "}
+                {imessage.imessageCampaigns} active campaign(s) routed here
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Telnyx connection */}
       <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">

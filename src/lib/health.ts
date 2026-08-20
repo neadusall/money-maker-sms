@@ -1,5 +1,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db/client";
+import { isBridgeConfigured, bridgeHealth } from "./bluebubbles";
+import { laneHealth } from "./lane";
 
 /**
  * System health checks for OS Text (taltxt).
@@ -266,15 +268,96 @@ export async function getSenders(): Promise<Sender[]> {
 
 export type OverallStatus = "ok" | "degraded" | "down";
 
+/**
+ * The iMessage lane's registration on the health board. Every subsystem has to answer for
+ * itself here, or an outage on it is invisible until a recruiter notices replies stopped.
+ *
+ * `reachable` is the one that matters most. The bridge is a Mac on someone's desk behind a
+ * tunnel: it sleeps, it loses wifi, Messages.app gets signed out. None of that raises an
+ * error anywhere until a campaign has been quietly failing for hours.
+ */
+export type IMessageHealth = {
+  /** Bridge URL + password are set AND a tenant is opted in. */
+  configured: boolean;
+  /** The Mac answered its health endpoint just now. */
+  reachable: boolean;
+  error: string | null;
+  /** Campaigns currently routed to the blue lane. */
+  imessageCampaigns: number;
+  sent24h: number;
+  /** Sends still awaiting reconcile after an ambiguous bridge timeout. */
+  uncertain: number;
+  /** Rolling behavior check on our own Apple line. */
+  replyRatePct: number;
+  failureRatePct: number;
+  laneHealthy: boolean;
+  laneNote: string;
+};
+
 export type HealthReport = {
   status: OverallStatus;
   checkedAt: string;
   telnyx: TelnyxConnection;
+  imessage: IMessageHealth;
   sms: SmsHealth;
   recruiters: RecruiterRow[];
   senders: Sender[];
   issues: string[];
 };
+
+export const EMPTY_IMESSAGE: IMessageHealth = {
+  configured: false,
+  reachable: false,
+  error: null,
+  imessageCampaigns: 0,
+  sent24h: 0,
+  uncertain: 0,
+  replyRatePct: 0,
+  failureRatePct: 0,
+  laneHealthy: true,
+  laneNote: "lane not in use",
+};
+
+/**
+ * Ask the Mac directly AND read our own database. Both halves are needed: the bridge can be
+ * reachable while the Apple line is being throttled, and the line can be perfectly healthy
+ * while the Mac is asleep.
+ */
+export async function getIMessageHealth(): Promise<IMessageHealth> {
+  const configured = isBridgeConfigured() && Boolean((process.env.OSTEXT_IMESSAGE_TENANT || "").trim());
+  if (!configured) return EMPTY_IMESSAGE;
+
+  const [bridge, lane, counts, campaignRow] = await Promise.all([
+    bridgeHealth().catch((err) => ({ ok: false, error: err instanceof Error ? err.message : String(err) })),
+    laneHealth().catch(() => null),
+    db.execute(sql`
+      SELECT
+        count(*) FILTER (WHERE direction = 'outbound' AND created_at > now() - interval '24 hours')::int AS sent_24h,
+        count(*) FILTER (WHERE status = 'uncertain')::int AS uncertain
+      FROM messages WHERE provider = 'imessage'
+    `) as Promise<{ rows?: Record<string, unknown>[] }>,
+    db.execute(sql`
+      SELECT count(*)::int AS n FROM campaigns
+      WHERE channel IN ('imessage', 'auto') AND status = 'active'
+    `) as Promise<{ rows?: Record<string, unknown>[] }>,
+  ]);
+
+  const c = ((counts as { rows?: Record<string, unknown>[] }).rows ?? [])[0] ?? {};
+  const bh = bridge as { ok?: boolean; error?: string | null };
+
+  return {
+    configured: true,
+    reachable: Boolean(bh.ok),
+    error: bh.ok ? null : (bh.error ?? "bridge unreachable"),
+    imessageCampaigns: Number((campaignRow.rows ?? [])[0]?.n ?? 0) || 0,
+    sent24h: Number(c.sent_24h ?? 0) || 0,
+    uncertain: Number(c.uncertain ?? 0) || 0,
+    replyRatePct: lane ? Math.round(lane.replyRate * 1000) / 10 : 0,
+    failureRatePct: lane ? Math.round(lane.failureRate * 1000) / 10 : 0,
+    laneHealthy: lane ? lane.healthy : true,
+    laneNote: lane ? lane.note : "unavailable",
+  };
+}
 
 /**
  * Roll the raw checks into one status + a plain-English issue list.
@@ -286,10 +369,37 @@ export function summarize(
   telnyx: TelnyxConnection,
   sms: SmsHealth,
   recruiters: RecruiterRow[],
+  imessage: IMessageHealth = EMPTY_IMESSAGE,
 ): { status: OverallStatus; issues: string[] } {
   const issues: string[] = [];
   let down = false;
   let degraded = false;
+
+  // --- iMessage lane ---------------------------------------------------------------
+  // The bridge is a Mac on a desk. It sleeps, it drops wifi, Messages.app gets signed out,
+  // and none of that raises an error anywhere - the campaign just quietly stops delivering.
+  // DEGRADED rather than down, because Telnyx is still carrying everything on 'auto'.
+  if (imessage.configured && !imessage.reachable) {
+    issues.push(
+      `The iMessage Mac bridge is not answering${imessage.error ? ` (${imessage.error})` : ""}. iMessage campaigns are holding; auto campaigns are sending on SMS.`,
+    );
+    degraded = true;
+  }
+  if (imessage.imessageCampaigns > 0 && !imessage.configured) {
+    issues.push(
+      `${imessage.imessageCampaigns} active campaign(s) are set to the iMessage lane but the bridge is not configured (BLUEBUBBLES_URL / BLUEBUBBLES_PASSWORD / OSTEXT_IMESSAGE_TENANT). Auto campaigns fall back to SMS; iMessage-only campaigns are held.`,
+    );
+    degraded = true;
+  }
+  if (!imessage.laneHealthy) {
+    issues.push(`iMessage line needs a look: ${imessage.laneNote}. Sending on the lane is paused.`);
+    degraded = true;
+  }
+  if (imessage.uncertain > 0) {
+    issues.push(
+      `${imessage.uncertain} iMessage send(s) are unconfirmed after a bridge timeout. They are NOT auto-resent (double-text guard); the reconcile sweep settles them within 30 minutes.`,
+    );
+  }
 
   if (!telnyx.apiKeySet) {
     issues.push("Telnyx API key is not configured, so we cannot verify the connection.");
@@ -364,11 +474,12 @@ const EMPTY_SMS: SmsHealth = {
  * instead of blanking the whole status page.
  */
 export async function getHealthReport(): Promise<HealthReport> {
-  const [telnyxR, smsR, recruitersR, sendersR] = await Promise.allSettled([
+  const [telnyxR, smsR, recruitersR, sendersR, imessageR] = await Promise.allSettled([
     getTelnyxConnection(),
     getSmsHealth(),
     getRecruiterBreakdown(),
     getSenders(),
+    getIMessageHealth(),
   ]);
 
   const telnyx: TelnyxConnection =
@@ -394,9 +505,11 @@ export async function getHealthReport(): Promise<HealthReport> {
   const recruiters = recruitersR.status === "fulfilled" ? recruitersR.value : [];
   const senders = sendersR.status === "fulfilled" ? sendersR.value : [];
 
-  const { status, issues } = summarize(telnyx, sms, recruiters);
+  const imessage = imessageR.status === "fulfilled" ? imessageR.value : EMPTY_IMESSAGE;
+
+  const { status, issues } = summarize(telnyx, sms, recruiters, imessage);
   if (smsR.status === "rejected") {
     issues.unshift("Could not read the message database for this check. Metrics may be incomplete.");
   }
-  return { status, checkedAt: new Date().toISOString(), telnyx, sms, recruiters, senders, issues };
+  return { status, checkedAt: new Date().toISOString(), telnyx, imessage, sms, recruiters, senders, issues };
 }

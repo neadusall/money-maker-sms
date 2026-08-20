@@ -47,6 +47,19 @@ export async function POST(request: Request) {
     await enqueueCampaignDrain(campaignId, 30);
     return NextResponse.json({ ok: true, note: "waiting for fit scoring", unscored: r.unscored });
   }
+  if (r.state === "capped") {
+    // Day-spreading: today's allowance is spent for the moment. Re-enqueue on a slow beat
+    // (not the 3s "keep going" cadence) so the campaign resumes as the window earns more
+    // volume without hammering the queue all day.
+    await enqueueCampaignDrain(campaignId, 120);
+    return NextResponse.json({
+      ok: true,
+      note: "daily cap paced; waiting for the next release",
+      sentToday: r.sentToday,
+      allowance: r.allowance,
+      remaining: r.remaining,
+    });
+  }
 
   if (r.remaining > 0) {
     // Keep going: re-enqueue another pass shortly.

@@ -16,6 +16,7 @@ import { shortRelative, timeOfDay } from "@/lib/time";
 import { Avatar } from "@/components/Avatar";
 import { CallButton } from "@/components/CallButton";
 import { StatusIcon } from "@/components/StatusIcon";
+import { LaneBadge, LANE_BUBBLE, laneOf } from "@/components/LaneBadge";
 import { ScoreBadge } from "@/components/ScoreBadge";
 
 export const dynamic = "force-dynamic";
@@ -207,14 +208,24 @@ export default async function ThreadPage({
 type Msg = {
   id: string;
   direction: "outbound" | "inbound";
-  status: "queued" | "sending" | "sent" | "delivered" | "failed" | "received";
+  // "uncertain" = the Mac bridge timed out after Messages.app may already have sent. The
+  // reconcile sweep settles it; nothing is resent in the meantime.
+  status: "queued" | "sending" | "sent" | "delivered" | "failed" | "received" | "uncertain";
   body: string;
   createdAt: Date;
   error: string | null;
+  // Which lane carried it. The bubble is painted from this so the recruiter sees the same
+  // blue/green the candidate does. Running our own bridge is what makes one column enough:
+  // a hosted API would downgrade to SMS silently and this would need a second field.
+  provider: "telnyx" | "imessage";
 };
 
 function MessageBubble({ message }: { message: Msg }) {
   const out = message.direction === "outbound";
+  // Apple's own colors: blue for iMessage, green for anything that landed as SMS. A
+  // recruiter should be able to tell the lane apart at a glance, exactly the way the
+  // candidate does on their phone, without reading a word.
+  const lane = laneOf(message);
   return (
     <div className={out ? "flex justify-end" : "flex justify-start"}>
       <div className={"max-w-[75%] " + (out ? "items-end" : "items-start")}>
@@ -222,7 +233,7 @@ function MessageBubble({ message }: { message: Msg }) {
           className={
             "rounded-2xl px-3.5 py-2 text-sm leading-snug " +
             (out
-              ? "bg-sky-600 text-white rounded-br-sm"
+              ? `${LANE_BUBBLE[lane]} rounded-br-sm`
               : "bg-surface text-zinc-900 border border-zinc-200 rounded-bl-sm shadow-sm")
           }
         >
@@ -238,6 +249,7 @@ function MessageBubble({ message }: { message: Msg }) {
           }
         >
           <span>{timeOfDay(message.createdAt)}</span>
+          {out ? <LaneBadge lane={lane} /> : null}
           {out ? <StatusIcon status={message.status} /> : null}
           {message.error ? (
             <span className="ml-1 text-rose-500" title={message.error}>

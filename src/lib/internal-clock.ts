@@ -5,6 +5,7 @@ import { isQStashConfigured } from "./schedule";
 import { runValidateBatch, runScoreBatch, runSendBatch, dispatchScheduledMessage } from "./drains";
 import { sweepReplyAlerts } from "./reply-alerts";
 import { runClassifyBacklog } from "./classify-backlog";
+import { reconcileUncertainSends } from "./lane";
 
 /**
  * The in-process clock: the self-hosted replacement for QStash.
@@ -69,6 +70,14 @@ export function logSetupReadiness(): void {
         flag("ANTHROPIC_API_KEY"),
         flag("ACCESS_TOKEN"),
         `QSTASH_TOKEN=${has("QSTASH_TOKEN") ? "set (QStash drives the drains)" : "unset (internal clock drives the drains)"}`,
+        // iMessage lane (our own Mac bridge). Reported even when unconfigured, because
+        // "the blue lane is off" is the answer to "why did my iMessage campaign go out
+        // green?" and it should take one glance at docker logs to find.
+        `IMESSAGE=${
+          has("BLUEBUBBLES_URL") && has("BLUEBUBBLES_PASSWORD") && has("OSTEXT_IMESSAGE_TENANT")
+            ? `set (tenant ${(process.env.OSTEXT_IMESSAGE_TENANT || "").trim()}, webhook secret ${has("BLUEBUBBLES_WEBHOOK_SECRET") ? "set" : "MISSING"})`
+            : "unset (iMessage lane off; auto campaigns fall back to SMS)"
+        }`,
       ].join(" · "),
   );
 }
@@ -193,6 +202,19 @@ async function sweep(): Promise<void> {
       }
     } catch (err) {
       console.error("[clock classify-backlog]", err);
+    }
+    // 7. Settle 'uncertain' iMessage sends. The Mac bridge is known to hand Messages.app a
+    // send and THEN time out, so those rows are parked rather than resent — resending is
+    // how a candidate gets the same message twice, once blue and once green. This asks the
+    // Mac whether it actually went, and gives up (as a visible failure in the thread) after
+    // 30 minutes so a recruiter can resend deliberately. Instant no-op without the bridge.
+    try {
+      const r = await reconcileUncertainSends();
+      if (r.confirmed || r.failed) {
+        console.log(`[clock imessage-reconcile] checked=${r.checked} confirmed=${r.confirmed} failed=${r.failed}`);
+      }
+    } catch (err) {
+      console.error("[clock imessage-reconcile]", err);
     }
   } catch (err) {
     // One bad sweep must never kill the clock.

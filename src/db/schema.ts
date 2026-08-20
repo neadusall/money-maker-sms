@@ -42,6 +42,24 @@ export const messageDirection = pgEnum("message_direction", [
   "inbound",
 ]);
 
+/**
+ * Which wire carried the message. "imessage" = OUR OWN BlueBubbles Mac bridge (no third
+ * party in the path); "telnyx" = carrier SMS. Every pre-existing row is 'telnyx' (the
+ * column defaults to it), so years of SMS history stay correctly labeled and the
+ * blue-vs-green comparison starts counting from the first real iMessage send.
+ *
+ * The conversation is keyed by phone number, never by provider, so one thread can mix both
+ * wires - which is exactly what happens when a contact is texted on iMessage and followed
+ * up on SMS.
+ */
+export const messageProvider = pgEnum("message_provider", ["telnyx", "imessage"]);
+
+/**
+ * How a campaign picks its lane. 'sms' is the default so every campaign that existed
+ * before the iMessage lane keeps behaving byte-for-byte as it did.
+ */
+export const campaignChannel = pgEnum("campaign_channel", ["sms", "imessage", "auto"]);
+
 export const messageStatus = pgEnum("message_status", [
   "queued",
   "sending",
@@ -49,6 +67,10 @@ export const messageStatus = pgEnum("message_status", [
   "delivered",
   "failed",
   "received",
+  // The bridge answered with a timeout AFTER Messages.app may have already sent. The
+  // message is NOT retried on Telnyx (that risks texting the candidate twice); the
+  // reconcile sweep resolves it to sent or failed.
+  "uncertain",
 ]);
 
 export const conversationStatus = pgEnum("conversation_status", [
@@ -141,6 +163,30 @@ export const campaigns = pgTable("campaigns", {
 
   fromNumber: text("from_number"),
 
+  // Which lane this campaign sends on. 'sms' = Telnyx only (the default, and what every
+  // campaign created before the iMessage lane keeps). 'imessage' = our Mac bridge only,
+  // holding contacts the bridge cannot reach rather than silently sending green.
+  // 'auto' = ask the bridge whether each handle is iMessage-capable, blue if yes,
+  // Telnyx if no or unknown.
+  channel: campaignChannel("channel").default("sms").notNull(),
+
+  // Max outbound messages per calendar day for this campaign, spread evenly across the
+  // send window rather than fired as one burst. Null = uncapped (legacy behavior: the
+  // batch drain sends as fast as the pacing allows).
+  //
+  // This is the single most important control on a cold line. Carriers filter on volume
+  // spikes and Apple flags Apple IDs that fan out fast, so "200/day" only protects the
+  // number if it is genuinely 200 across nine hours and not 200 inside the first ten
+  // minutes. On the iMessage lane this cap sits UNDER the warm-up ceilings in
+  // imessage-warmup.ts, which are stricter and cannot be raised by campaign settings.
+  dailyCap: integer("daily_cap"),
+
+  // Day 1 of a cold line does not get the full cap. The allowance ramps from this floor by
+  // `rampStep` each day the line stays healthy, until it reaches dailyCap. Null = no ramp
+  // (start at the cap immediately) — only correct for a line that is already warm.
+  rampStart: integer("ramp_start"),
+  rampStep: integer("ramp_step"),
+
   sendWindowStart: text("send_window_start").default("09:00").notNull(),
   sendWindowEnd: text("send_window_end").default("19:00").notNull(),
 
@@ -206,6 +252,7 @@ export const contacts = pgTable(
     status: contactStatus("status").default("pending").notNull(),
     optedOut: boolean("opted_out").default(false).notNull(),
     lastError: text("last_error"),
+
 
     // Set when the candidate replied with an email address and we auto-sent
     // them the position details. Prevents re-sending on subsequent replies.
@@ -297,8 +344,26 @@ export const messages = pgTable(
     status: messageStatus("status").notNull(),
     body: text("body").notNull(),
 
+    // Telnyx's own id for this message. The iMessage lane keeps its id in
+    // `bluebubbles_guid` instead, because the two are genuinely different things: a GUID
+    // is assigned by us up front (so an ambiguous send can be reconciled later) while a
+    // Telnyx id only exists once the API has accepted the message.
     telnyxId: text("telnyx_id"),
     error: text("error"),
+
+    // Which lane carried it. Defaults to 'telnyx' so every row written before the iMessage
+    // lane existed is correctly labeled without a backfill.
+    //
+    // Running our own bridge removes an ambiguity a hosted API would force on us: a vendor
+    // silently downgrades to carrier SMS for non-iPhones, so provider alone would not tell
+    // you what colour bubble arrived. The router only hands the bridge handles the Mac
+    // positively reports as iMessage-capable, so provider='imessage' IS a blue bubble and
+    // the lane comparison can trust this one column.
+    provider: messageProvider("provider").default("telnyx").notNull(),
+
+    // Real message GUID once the bridge confirms; holds our temp GUID while a send is
+    // status 'uncertain' so the reconcile sweep can look it up.
+    blueBubblesGuid: text("bluebubbles_guid"),
 
     classification: classificationLabel("classification"),
     draftReply: text("draft_reply"),
@@ -313,8 +378,24 @@ export const messages = pgTable(
       t.createdAt,
     ),
     telnyxIdIdx: index("messages_telnyx_id_idx").on(t.telnyxId),
+    blueBubblesGuidIdx: index("messages_bluebubbles_guid_idx").on(t.blueBubblesGuid),
+    // The lane comparison groups by provider over a date window on every dashboard load.
+    providerIdx: index("messages_provider_idx").on(t.provider, t.createdAt),
   }),
 );
+
+/**
+ * iMessage capability cache: what the Mac bridge last said about a handle.
+ *
+ * A hint for routing, never an oracle. Availability checks are known to return false
+ * negatives, so `imessage: null` (unknown) is a REAL state, and unknowns route to Telnyx
+ * unless policy explicitly opts them into the bridge.
+ */
+export const handleCapabilities = pgTable("handle_capabilities", {
+  phone: text("phone").primaryKey(),
+  imessage: boolean("imessage"),
+  checkedAt: timestamp("checked_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 export const scheduledMessages = pgTable(
   "scheduled_messages",

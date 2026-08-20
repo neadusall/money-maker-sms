@@ -29,6 +29,14 @@ export function StatusIcon({ status }: { status: Message["status"] }) {
           <path d="M8 1.5A6.5 6.5 0 1 1 1.5 8 6.5 6.5 0 0 1 8 1.5zM7 4v5h2V4H7zm0 6.5v2h2v-2H7z" />
         </svg>
       );
+    case "uncertain":
+      // iMessage left the Mac bridge ambiguously; the reconcile sweep will
+      // settle it to sent or failed. Amber hourglass = "being confirmed".
+      return (
+        <svg className="h-3 w-3 text-amber-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M4 2h8M4 14h8M5 2c0 6 6 4 6 12M11 2c0 6-6 4-6 12" />
+        </svg>
+      );
     case "received":
       return null;
     default:

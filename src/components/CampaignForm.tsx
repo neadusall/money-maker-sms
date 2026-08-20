@@ -138,6 +138,55 @@ export function CampaignForm({
           Texts only go out between these hours. Outside the window, sends pause and resume automatically when it
           reopens.
         </p>
+
+        <Row>
+          <Select
+            label="Sending lane"
+            name="channel"
+            defaultValue={campaign?.channel ?? "sms"}
+            options={[
+              { value: "sms", label: "SMS only (Telnyx)" },
+              { value: "auto", label: "Auto - iMessage to iPhones, SMS to everyone else" },
+              { value: "imessage", label: "iMessage only (our Mac bridge)" },
+            ]}
+          />
+          <Field
+            label="Daily send cap (optional)"
+            name="dailyCap"
+            type="number"
+            placeholder="200"
+            defaultValue={campaign?.dailyCap != null ? String(campaign.dailyCap) : ""}
+            help="Spread evenly across the send window instead of sent as one burst."
+          />
+        </Row>
+        <p className="-mt-2 text-xs text-zinc-500">
+          A cap is what protects a business line. Carriers score volume spikes and Apple blocks lines that fan out
+          fast, so 200 a day only helps if it is genuinely 200 across the whole window. Leave the cap blank and the
+          campaign sends as fast as it can.
+        </p>
+
+        <Row>
+          <Field
+            label="Warm-up: day 1 volume (optional)"
+            name="rampStart"
+            type="number"
+            placeholder="20"
+            defaultValue={campaign?.rampStart != null ? String(campaign.rampStart) : ""}
+            help="A cold line should not open at full volume."
+          />
+          <Field
+            label="Warm-up: daily increase (optional)"
+            name="rampStep"
+            type="number"
+            placeholder="20"
+            defaultValue={campaign?.rampStep != null ? String(campaign.rampStep) : ""}
+            help="Added to the allowance each day until it reaches the cap."
+          />
+        </Row>
+        <p className="-mt-2 text-xs text-zinc-500">
+          With 20 and 20 against a 200 cap, the line opens at 20 on day one and reaches full volume on day ten. Leave
+          both blank only for a number that is already warm.
+        </p>
         <Field
           label="Send date & time (required before anything sends)"
           name="scheduledAt"

@@ -62,6 +62,7 @@ import { syncTodosForConversation } from "./todos";
 import { scoreContactDeep } from "./qualify";
 import { ensureRubric } from "./rubric";
 import { isCalendarConfigured, mightProposeTime, extractMeeting, sendCalendarInvite } from "./calendar";
+import { replyOnThreadLane } from "./lane";
 
 function str(formData: FormData, key: string): string | null {
   const v = formData.get(key);
@@ -78,6 +79,28 @@ function str(formData: FormData, key: string): string | null {
 function fromE164(formData: FormData): string | null {
   const v = str(formData, "fromNumber");
   return v ? normalizePhone(v) ?? v : null;
+}
+
+/**
+ * The sending lane for this campaign. Anything unrecognized falls back to "sms" so a
+ * mangled form post can never silently move a campaign onto the paid iMessage line.
+ */
+function channelOf(formData: FormData): "sms" | "imessage" | "auto" {
+  const v = str(formData, "channel");
+  return v === "imessage" || v === "auto" ? v : "sms";
+}
+
+/**
+ * A positive integer field, or null when blank/zero/garbage. Used for the daily cap and the
+ * warm-up ramp: null means "unset", which the pacing code reads as uncapped rather than as
+ * a cap of zero (a cap of zero would silently stop the campaign).
+ */
+function intOrNull(formData: FormData, key: string): number | null {
+  const raw = str(formData, key);
+  if (!raw) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.floor(n);
 }
 
 // Parse the optional "Schedule send" datetime-local field. The browser sends a
@@ -327,6 +350,10 @@ export async function createCampaign(formData: FormData) {
       minScoreToSend: 50,
       sendWindowStart: str(formData, "sendWindowStart") ?? "09:00",
       sendWindowEnd: str(formData, "sendWindowEnd") ?? "19:00",
+      channel: channelOf(formData),
+      dailyCap: intOrNull(formData, "dailyCap"),
+      rampStart: intOrNull(formData, "rampStart"),
+      rampStep: intOrNull(formData, "rampStep"),
       scheduledAt,
     })
     .returning();
@@ -452,6 +479,10 @@ export async function updateCampaign(campaignId: string, formData: FormData) {
       targetRegion: str(formData, "targetRegion"),
       sendWindowStart: str(formData, "sendWindowStart") ?? undefined,
       sendWindowEnd: str(formData, "sendWindowEnd") ?? undefined,
+      channel: channelOf(formData),
+      dailyCap: intOrNull(formData, "dailyCap"),
+      rampStart: intOrNull(formData, "rampStart"),
+      rampStep: intOrNull(formData, "rampStep"),
       scheduledAt,
       updatedAt: new Date(),
     })
@@ -821,6 +852,13 @@ export async function recordInbound(args: {
   fromPhone: string;
   body: string;
   telnyxId?: string | null;
+  // Which lane the reply arrived on. Omitted = the Telnyx SMS lane, so every existing
+  // call site keeps its behavior. Labeling inbound by lane is what makes the
+  // blue-vs-green REPLY RATE real: an unlabeled reply cannot be attributed to the
+  // lane that earned it, and the comparison silently credits everything to SMS.
+  provider?: "telnyx" | "imessage";
+  // The bridge's own GUID for an inbound iMessage, used for webhook dedupe.
+  blueBubblesGuid?: string | null;
 }): Promise<{ matched: boolean; conversationId?: string }> {
   const e164 = normalizePhone(args.fromPhone);
   if (!e164) {
@@ -897,6 +935,8 @@ export async function recordInbound(args: {
         status: "received",
         body: args.body,
         telnyxId: args.telnyxId ?? null,
+        provider: args.provider ?? "telnyx",
+        blueBubblesGuid: args.blueBubblesGuid ?? null,
         classification: "stop",
       });
     // Permanent global do-not-text: opts out every contact row with this
@@ -926,6 +966,8 @@ export async function recordInbound(args: {
       status: "received",
       body: args.body,
       telnyxId: args.telnyxId ?? null,
+      provider: args.provider ?? "telnyx",
+      blueBubblesGuid: args.blueBubblesGuid ?? null,
     })
     .returning();
 
@@ -1311,24 +1353,36 @@ export async function sendManualReply(
 
   await paceForNextSend();
 
-  const result = await sendSms({
+  // Reply on the lane this thread is ALREADY on, not on the campaign's current channel.
+  // Answering a blue thread over SMS splits it into two conversations on the candidate's
+  // phone - same recruiter, two threads, one blue one green - which is confusing and reads
+  // as automation. There is deliberately no silent fallback: if the Mac is unreachable this
+  // throws, and the recruiter can text from the iPhone instead (which lands back in this
+  // same thread through the bridge webhook).
+  const result = await replyOnThreadLane({
+    conversationId,
     to: contact.phone,
     body,
     from: campaign?.fromNumber ?? undefined,
-    creds: telnyxCredsForTenant(campaign?.tenant),
+    telnyxCreds: telnyxCredsForTenant(campaign?.tenant),
   });
 
   if (!result.ok) {
-    throw new Error(`Telnyx send failed: ${result.error}`);
+    throw new Error(result.error);
   }
 
   await db.insert(messages).values({
     conversationId,
     direction: "outbound",
-    status: "sent",
+    // 'uncertain' = the Mac timed out after Messages.app may already have sent. Shown as
+    // pending in the thread and settled by the reconcile sweep; never silently resent.
+    status: result.uncertain ? "uncertain" : "sent",
     // Store the delivered text (footer included), not what was typed.
     body: result.text,
-    telnyxId: result.telnyxId,
+    provider: result.lane,
+    ...(result.lane === "imessage"
+      ? { blueBubblesGuid: result.providerId }
+      : { telnyxId: result.providerId }),
   });
   await db
     .update(conversations)
